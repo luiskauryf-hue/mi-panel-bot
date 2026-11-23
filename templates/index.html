@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Central - Gestión & Bots</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+    <div class="max-w-6xl mx-auto p-4 sm:p-6">
+        <!-- Encabezado -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-800 pb-4 mb-6 gap-2">
+            <div>
+                <h1 class="text-2xl font-bold text-emerald-400">Panel de Control & Automatización</h1>
+                <p class="text-slate-400 text-sm">Conectado a Telegram (-1003829850200) y Dolphin Anty</p>
+            </div>
+            <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-semibold">
+                ● Sistema Activo
+            </span>
+        </div>
+
+        <!-- Formulario para registrar nuevo perfil -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-8 shadow-lg">
+            <h2 class="text-lg font-semibold mb-4 text-slate-200">+ Registrar Nuevo Perfil / Huella Dolphin</h2>
+            <form action="/agregar" method="POST" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <input type="text" name="dolphin_id" placeholder="ID Dolphin (ej. 905812904)" required
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="text" name="codigo" placeholder="Código (ej. AAA1)" required
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="text" name="modelo" placeholder="Nombre Modelo"
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="text" name="telefono" placeholder="Teléfono (ej. +1 718...)"
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="text" name="ubicacion" placeholder="Ciudad / Zona (ej. Bronx, NY)"
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="url" name="foto_url" placeholder="URL directa de la Foto (.jpg)"
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <input type="url" name="enlace_anuncio" placeholder="Enlace del anuncio (opcional)"
+                    class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+                <button type="submit"
+                    class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg px-4 py-2 text-sm transition">
+                    Guardar Perfil
+                </button>
+                <textarea name="texto" rows="2" placeholder="Texto del anuncio que la extensión rellenará automáticamente..."
+                    class="sm:col-span-2 lg:col-span-4 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"></textarea>
+            </form>
+        </div>
+
+        <!-- Tarjetas de Perfiles Activos -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {% for p in perfiles %}
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between shadow-md">
+                <div>
+                    <div class="flex justify-between items-center mb-3">
+                        <span class="text-lg font-bold text-white">{{ p.codigo }} <span class="text-xs font-normal text-slate-400">({{ p.modelo or 'Sin nombre' }})</span></span>
+                        {% if p.estado == 'ACTIVA' %}
+                        <span class="bg-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-xs font-bold">ACTIVA</span>
+                        {% else %}
+                        <span class="bg-rose-500/20 text-rose-400 px-2.5 py-0.5 rounded-full text-xs font-bold">PAUSADA</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="space-y-1.5 text-sm text-slate-300 mb-4">
+                        <p><span class="text-slate-500">🆔 Huella Dolphin:</span> <code class="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-300">{{ p.dolphin_id }}</code></p>
+                        <p><span class="text-slate-500">📞 Teléfono:</span> {{ p.telefono or 'N/A' }}</p>
+                        <p><span class="text-slate-500">📍 Ubicación:</span> {{ p.ubicacion or 'N/A' }}</p>
+                        <p><span class="text-slate-500">🕒 Último bump:</span> {{ p.ultimo_bump }}</p>
+                        <p><span class="text-slate-500">📊 Bumps:</span> Hoy: <strong>{{ p.bumps_hoy }}</strong> | Total: <strong>{{ p.bumps_total }}</strong></p>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 pt-3 border-t border-slate-800">
+                    <a href="/toggle_estado/{{ p.id }}"
+                        class="flex-1 text-center bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 py-1.5 rounded-lg text-xs font-semibold">
+                        {{ 'Pausar' if p.estado == 'ACTIVA' else 'Reanudar' }}
+                    </a>
+                    {% if p.enlace_anuncio %}
+                    <a href="{{ p.enlace_anuncio }}" target="_blank"
+                        class="flex-1 text-center bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 py-1.5 rounded-lg text-xs font-semibold">
+                        Ver Post
+                    </a>
+                    {% endif %}
+                    <a href="/eliminar/{{ p.id }}" onclick="return confirm('¿Eliminar este perfil?')"
+                        class="bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded-lg text-xs font-semibold">
+                        Borrar
+                    </a>
+                </div>
+            </div>
+            {% else %}
+            <div class="col-span-full text-center py-10 text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                Aún no has registrado ningún perfil. Agrega tu primer ID de Dolphin arriba.
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
