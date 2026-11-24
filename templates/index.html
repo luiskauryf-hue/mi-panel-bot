@@ -37,31 +37,59 @@
                     class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
                 <input type="url" name="enlace_anuncio" placeholder="Enlace del anuncio (opcional)"
                     class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
+
+                <!-- Selector Propio vs Renta -->
+                <select name="es_renta" id="selectorRenta" onchange="toggleCamposRenta()"
+                    class="bg-slate-800 border border-amber-500/50 text-amber-300 font-semibold rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400">
+                    <option value="0">🏠 Perfil Propio (Admin)</option>
+                    <option value="1">🤝 Perfil de Renta (Cliente)</option>
+                </select>
+
+                <!-- Campos exclusivos cuando es Renta -->
+                <div id="bloqueRenta" class="hidden sm:col-span-2 lg:col-span-4 grid grid-cols-1 sm:grid-cols-3 gap-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                    <input type="text" name="cliente_nombre" placeholder="Nombre del Cliente (ej. Sofía)"
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400">
+                    <input type="text" name="cliente_chat_id" placeholder="ID Grupo Telegram Cliente (ej. -100...)"
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400">
+                    <input type="text" name="vence_renta" placeholder="Vence renta (ej. Jueves 18 Dic)"
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400">
+                </div>
+
+                <textarea name="texto" rows="2" placeholder="Texto del anuncio que la extensión rellenará automáticamente..."
+                    class="sm:col-span-2 lg:col-span-3 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"></textarea>
+
                 <button type="submit"
                     class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg px-4 py-2 text-sm transition">
                     Guardar Perfil
                 </button>
-                <textarea name="texto" rows="2" placeholder="Texto del anuncio que la extensión rellenará automáticamente..."
-                    class="sm:col-span-2 lg:col-span-4 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"></textarea>
             </form>
         </div>
 
         <!-- Tarjetas de Perfiles Activos -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {% for p in perfiles %}
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between shadow-md">
+            <div class="bg-slate-900 border {{ 'border-amber-500/40' if p.es_renta else 'border-slate-800' }} rounded-xl p-5 flex flex-col justify-between shadow-md">
                 <div>
-                    <div class="flex justify-between items-center mb-3">
+                    <div class="flex justify-between items-center mb-3 gap-2">
                         <span class="text-lg font-bold text-white">{{ p.codigo }} <span class="text-xs font-normal text-slate-400">({{ p.modelo or 'Sin nombre' }})</span></span>
-                        {% if p.estado == 'ACTIVA' %}
-                        <span class="bg-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-xs font-bold">ACTIVA</span>
-                        {% else %}
-                        <span class="bg-rose-500/20 text-rose-400 px-2.5 py-0.5 rounded-full text-xs font-bold">PAUSADA</span>
-                        {% endif %}
+                        <div class="flex items-center gap-1.5">
+                            {% if p.es_renta %}
+                            <span class="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full text-xs font-bold">RENTA</span>
+                            {% endif %}
+                            {% if p.estado == 'ACTIVA' %}
+                            <span class="bg-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-xs font-bold">ACTIVA</span>
+                            {% else %}
+                            <span class="bg-rose-500/20 text-rose-400 px-2.5 py-0.5 rounded-full text-xs font-bold">PAUSADA</span>
+                            {% endif %}
+                        </div>
                     </div>
 
                     <div class="space-y-1.5 text-sm text-slate-300 mb-4">
                         <p><span class="text-slate-500">🆔 Huella Dolphin:</span> <code class="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-300">{{ p.dolphin_id }}</code></p>
+                        {% if p.es_renta %}
+                        <p><span class="text-amber-400">🤝 Cliente:</span> <strong>{{ p.cliente_nombre or 'Sin nombre' }}</strong> ({{ p.cliente_chat_id or 'Sin ID' }})</p>
+                        <p><span class="text-amber-400">⏳ Vence:</span> {{ p.vence_renta or 'Sin fecha' }}</p>
+                        {% endif %}
                         <p><span class="text-slate-500">📞 Teléfono:</span> {{ p.telefono or 'N/A' }}</p>
                         <p><span class="text-slate-500">📍 Ubicación:</span> {{ p.ubicacion or 'N/A' }}</p>
                         <p><span class="text-slate-500">🕒 Último bump:</span> {{ p.ultimo_bump }}</p>
@@ -93,5 +121,17 @@
             {% endfor %}
         </div>
     </div>
+
+    <script>
+        function toggleCamposRenta() {
+            const selector = document.getElementById("selectorRenta");
+            const bloque = document.getElementById("bloqueRenta");
+            if (selector.value === "1") {
+                bloque.classList.remove("hidden");
+            } else {
+                bloque.classList.add("hidden");
+            }
+        }
+    </script>
 </body>
 </html>
