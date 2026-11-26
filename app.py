@@ -807,6 +807,22 @@ def api_report_bump():
     f = request.files.get("captura") or request.files.get("photo")
     if f and f.filename:
         ext = os.path.splitext(f.filename)[1][:10] or ".jpg"; photo_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}"); f.save(photo_path)
+    if not photo_path:
+        # Foto limpia del anuncio (como v10): la extensión manda la URL de la foto de la modelo
+        # y el servidor la descarga (sin problemas de CORS). Solo URLs http/https públicas.
+        foto_url = (request.form.get("foto_url") or "").strip()
+        if foto_url.startswith(("http://", "https://")):
+            try:
+                r = requests.get(foto_url, timeout=15, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if r.ok and ("image" in ctype or foto_url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp"))):
+                    data = r.raw.read(10 * 1024 * 1024 + 1, decode_content=True)
+                    if 0 < len(data) <= 10 * 1024 * 1024:
+                        ext = ".png" if "png" in ctype else ".jpg"
+                        photo_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}")
+                        with open(photo_path, "wb") as fh: fh.write(data)
+            except Exception:
+                photo_path = ""
     if kind == "bump":
         today = rd_date()
         if p.bumps_date != today: p.bumps_date = today; p.bumps_today = 0
@@ -815,16 +831,18 @@ def api_report_bump():
     sess.commit()
     destino = p.client_chat_id if (p.is_rental and p.client_chat_id) else ADMIN_CHAT_ID
     hora = rd_now().strftime("%I:%M:%S %p")
-    caption = (f"🔥 <b>{'BUMP CONFIRMADO' if kind=='bump' else 'FOTO'}</b>\n\n👤 <b>Modelo:</b> {esc(p.modelo or 'N/A')}\n🆔 <b>Código:</b> {esc(p.codigo)}\n"
-               f"📞 <b>Teléfono:</b> {esc(p.telefono or 'N/A')}\n📍 <b>Ubicación:</b> {esc(p.ubicacion or 'N/A')}\n🟢 <b>Estado:</b> {'PAUSADA' if p.paused else 'ACTIVA'}\n"
-               f"🕒 <b>Hora (RD):</b> {hora}\n📊 <b>Bumps hoy:</b> {p.bumps_today} | <b>Total:</b> {p.bumps_total}")
+    prox_txt = "Detenido" if p.paused else (p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if p.next_bump_at_utc else "—")
+    caption = (f"📸 <b>{'Bump exitoso' if kind=='bump' else 'Foto de tu anuncio'}</b>\n\n📞 <b>Número:</b> {esc(p.telefono or 'N/A')}\n🆔 <b>Código:</b> {esc(p.codigo)}\n"
+               f"📍 <b>Ciudad:</b> {esc(p.ubicacion or 'N/A')}\n{'🔴' if p.paused else '🟢'} <b>Estado:</b> {'PAUSADA' if p.paused else 'ACTIVA'}\n"
+               f"⏰ <b>Horario (RD):</b> Pausa {fmt_ampm(p.pause_at_rd)} | Reanuda {fmt_ampm(p.resume_at_rd)}\n"
+               f"🕒 <b>Hora (RD):</b> {hora} | <b>Próx:</b> {prox_txt}\n📊 <b>Bumps hoy:</b> {p.bumps_today} | <b>Total:</b> {p.bumps_total}")
     kb = None if (p.is_rental and destino == p.client_chat_id) else kb_admin_profile(p)
     if p.is_rental and destino == p.client_chat_id:
         vence = p.rental_expires_at.astimezone(RD_TZ).strftime("%d/%m/%Y") if p.rental_expires_at else "Consultar"
         prox = p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if p.next_bump_at_utc else "—"
         caption += f"\n⏳ <b>Vence renta:</b> {vence}\n🔥 <b>Próximo bump:</b> {prox} (RD)"
     if kind == "photo" and not photo_path:
-        caption += "\n📷 Sin imagen: la ventana no estaba visible al capturar."
+        caption += "\n📷 Sin imagen: no se pudo obtener la foto del anuncio ni capturar la pantalla."
     enqueue_telegram(sess, destino, text=caption, reply_markup=kb, photo_path=photo_path, caption=caption)
     sess.close(); return jsonify({"ok": True})
 
