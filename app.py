@@ -805,9 +805,10 @@ def api_report_bump():
     kind = request.form.get("kind", "bump")  # bump|photo
     photo_path = ""
     f = request.files.get("captura") or request.files.get("photo")
+    uploaded_path = ""
     if f and f.filename:
-        ext = os.path.splitext(f.filename)[1][:10] or ".jpg"; photo_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}"); f.save(photo_path)
-    if not photo_path:
+        ext = os.path.splitext(f.filename)[1][:10] or ".jpg"; uploaded_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}"); f.save(uploaded_path)
+    if True:
         # Foto limpia del anuncio (como v10): la extensión manda la URL de la foto de la modelo
         # y el servidor la descarga (sin problemas de CORS). Solo URLs http/https públicas.
         foto_url = (request.form.get("foto_url") or "").strip()
@@ -823,6 +824,8 @@ def api_report_bump():
                         with open(photo_path, "wb") as fh: fh.write(data)
             except Exception:
                 photo_path = ""
+    if not photo_path:
+        photo_path = uploaded_path
     if kind == "bump":
         today = rd_date()
         if p.bumps_date != today: p.bumps_date = today; p.bumps_today = 0
