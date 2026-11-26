@@ -109,13 +109,21 @@ class PendingInput(Base):
     profile_id = Column(Integer, nullable=False); chat_id = Column(String, nullable=False)
     user_id = Column(String, default=""); field = Column(String, nullable=False)
     expires_at = Column(Float, nullable=False)
+    payload = Column(Text, default="")
 
 Base.metadata.create_all(engine)
+# Migracion segura para bases ya creadas (Postgres/SQLite): agrega payload si falta.
+try:
+    from sqlalchemy import text as _sql_text
+    with engine.begin() as _conn:
+        _conn.execute(_sql_text("ALTER TABLE pending_inputs ADD COLUMN payload TEXT DEFAULT ''"))
+except Exception:
+    pass
 
 app = Flask(__name__)
 
 LOGIN_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11 — Acceso</title>\n<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:#1e293b;padding:24px;border-radius:12px;width:min(92vw,360px)}input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #475569;margin-top:8px;box-sizing:border-box}button{background:#059669;color:#fff;border:0;font-weight:700}.err{color:#fda4af}</style></head>\n<body><form class="card" method="post"><h1>Panel SEBASTIÁN MEGA v11</h1>{% if error %}<p class="err">{{error}}</p>{% endif %}<label>Contraseña del panel<input type="password" name="password" required autofocus></label><button>Entrar</button></form></body></html>\n'
-INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
+INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
 
 def render_page(name, **ctx):
     # Siempre usar las pantallas v11 de adentro del archivo.
@@ -151,6 +159,14 @@ def _tg_send_once(msg):
             payload = {"chat_id": msg.chat_id, "text": msg.text[:4096], "parse_mode": "HTML"}
             if msg.reply_markup: payload["reply_markup"] = json.loads(msg.reply_markup)
             r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json=payload, timeout=TG_TIMEOUT)
+        if msg.kind == "photo" and not r.ok and r.status_code != 429:
+            # Respaldo: si la foto falla, manda el texto para que no se pierda el reporte.
+            try:
+                payload = {"chat_id": msg.chat_id, "text": msg.text[:4096], "parse_mode": "HTML"}
+                if msg.reply_markup: payload["reply_markup"] = json.loads(msg.reply_markup)
+                r2 = requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json=payload, timeout=TG_TIMEOUT)
+                if r2.ok: return True, 0, "foto falló, texto enviado"
+            except Exception: pass
         if r.status_code == 429:
             retry = 5
             try: retry = int(r.json().get("parameters", {}).get("retry_after", 5))
@@ -272,9 +288,10 @@ def kb_admin_profile(p):
         [{"text": "⏰ Programar pausa", "callback_data": f"adm:menu_pause:{p.id}"}, {"text": "⏰ Programar reanudar", "callback_data": f"adm:menu_resume:{p.id}"}],
         [{"text": "🕒 Último bump", "callback_data": f"adm:last_bump:{p.id}"}, {"text": "⚡ Bump ahora", "callback_data": f"adm:bump:{p.id}"}],
         [{"text": "⏱️ Minutos", "callback_data": f"adm:menu_interval:{p.id}"}, {"text": "📊 Ver todos", "callback_data": "adm:status"}],
+        [{"text": "📸 Foto", "callback_data": f"adm:photo:{p.id}"}],
     ]}
 def kb_global():
-    return {"keyboard": [[{"text": "📊 Ver Estados (🟢/🔴)"}, {"text": "📸 Foto de Todos"}], [{"text": "⏸️ Pausar todas"}, {"text": "▶️ Reanudar todas"}]], "resize_keyboard": True, "is_persistent": True}
+    return {"keyboard": [[{"text": "📊 Ver Estados (🟢/🔴)"}, {"text": "📸 Foto de Todos"}], [{"text": "⏸️ Pausar todas"}, {"text": "▶️ Reanudar todas"}], [{"text": "⏰ Horarios"}]], "resize_keyboard": True, "is_persistent": True}
 def fmt_ampm(hhmm):
     if not hhmm or ":" not in hhmm: return "No"
     h, m = map(int, hhmm.split(":")); ap = "PM" if h >= 12 else "AM"; h = h % 12 or 12
@@ -306,6 +323,52 @@ def send_rental_menu(sess, chat_id, p):
 def set_pending(sess, p, chat_id, user_id, field):
     sess.query(PendingInput).filter_by(profile_id=p.id, chat_id=str(chat_id)).delete()
     sess.add(PendingInput(profile_id=p.id, chat_id=str(chat_id), user_id=str(user_id or ""), field=field, expires_at=time.time()+600)); sess.commit()
+
+# ---------- Horarios flexibles: uno / varios marcados / todos ----------
+def _pend_payload(pend):
+    try: return json.loads(pend.payload or "{}")
+    except Exception: return {}
+
+def _set_sched_pending(sess, chat_id, user_id, field, payload, anchor_profile_id):
+    sess.query(PendingInput).filter_by(chat_id=str(chat_id)).filter(PendingInput.field.like("sched%")).delete()
+    pend = PendingInput(profile_id=int(anchor_profile_id), chat_id=str(chat_id), user_id=str(user_id or ""), field=field, expires_at=time.time()+600, payload=json.dumps(payload))
+    sess.add(pend); sess.commit(); return pend
+
+def _sched_get_pending(sess, chat_id):
+    return sess.query(PendingInput).filter_by(chat_id=str(chat_id)).filter(PendingInput.field.like("sched%")).filter(PendingInput.expires_at > time.time()).order_by(PendingInput.id.desc()).first()
+
+def _sched_toggle_kb(profiles, marked):
+    rows = []
+    for pr in profiles:
+        mark = "✅" if pr.id in marked else "⬜"
+        rows.append([{"text": f"{mark} {pr.codigo}", "callback_data": f"adm:sched_toggle:{pr.id}"}])
+    rows.append([{"text": "✅ Aplicar a marcados", "callback_data": "adm:sched_apply"}, {"text": "❌ Cancelar", "callback_data": "adm:sched_cancel"}])
+    return {"inline_keyboard": rows}
+
+def _sched_ask_pause(sess, chat_id, user_id, ids, profiles_by_id):
+    names = ", ".join(profiles_by_id[i].codigo for i in ids if i in profiles_by_id)
+    _set_sched_pending(sess, chat_id, user_id, "sched_pause", {"ids": ids}, ids[0])
+    kb = {"inline_keyboard": [[{"text": "11:00 PM", "callback_data": "adm:sched_set_pause:23:00"}, {"text": "12:00 AM", "callback_data": "adm:sched_set_pause:00:00"}, {"text": "03:00 AM", "callback_data": "adm:sched_set_pause:03:00"}], [{"text": "❌ Sin apagado", "callback_data": "adm:sched_set_pause:"}], [{"text": "❌ Cancelar", "callback_data": "adm:sched_cancel"}]]}
+    enqueue_telegram(sess, chat_id, f"⏰ <b>Hora de apagado (RD)</b> para: {esc(names)}\nElige o escribe la hora (ej. 03:30 AM)", kb)
+
+def _sched_ask_resume(sess, chat_id, user_id, payload):
+    ids = payload.get("ids", [])
+    _set_sched_pending(sess, chat_id, user_id, "sched_resume", payload, ids[0] if ids else 0)
+    kb = {"inline_keyboard": [[{"text": "07:00 AM", "callback_data": "adm:sched_set_resume:07:00"}, {"text": "08:00 AM", "callback_data": "adm:sched_set_resume:08:00"}, {"text": "10:00 AM", "callback_data": "adm:sched_set_resume:10:00"}], [{"text": "❌ Sin encendido", "callback_data": "adm:sched_set_resume:"}], [{"text": "❌ Cancelar", "callback_data": "adm:sched_cancel"}]]}
+    enqueue_telegram(sess, chat_id, "⏰ <b>Hora de encendido (RD)</b>\nElige o escribe la hora (ej. 08:30 AM)", kb)
+
+def _sched_finish(sess, chat_id, payload, resume_val, idem):
+    ids = payload.get("ids", []); pause_val = payload.get("pause", "")
+    done = []
+    for pid in ids:
+        pr = sess.query(Profile).filter_by(id=int(pid)).first()
+        if not pr: continue
+        apply_desired(sess, pr, pause_at_rd=pause_val, resume_at_rd=resume_val)
+        make_command(sess, pr, "set_config", {"pause_at_rd": pr.pause_at_rd, "resume_at_rd": pr.resume_at_rd, "interval_min": pr.interval_min}, idem)
+        done.append(pr.codigo)
+    sess.query(PendingInput).filter_by(chat_id=str(chat_id)).filter(PendingInput.field.like("sched%")).delete()
+    sess.commit()
+    enqueue_telegram(sess, chat_id, f"✅ Horario aplicado a {len(done)} perfil(es): {esc(', '.join(done))}\n⏸️ Apagado: {fmt_ampm(pause_val)} | ▶️ Encendido: {fmt_ampm(resume_val)} (RD)", kb_global())
 
 def parse_hora(texto):
     t = texto.strip().upper(); import re
@@ -355,6 +418,55 @@ def telegram_webhook():
                 elif action == "status":
                     lines = [profile_status_line(p) for p in profiles] or ["Sin perfiles"]
                     enqueue_telegram(sess, chat_id, "📊 <b>ESTADO GENERAL</b>\n" + "\n".join(lines), kb_global())
+                elif action == "photo" and len(parts) >= 3:
+                    p = sess.query(Profile).filter_by(id=int(parts[2])).first()
+                    if p:
+                        make_command(sess, p, "photo", {"reason": "admin"}, idem); sess.commit()
+                        enqueue_telegram(sess, chat_id, f"📸 Foto solicitada a <b>{esc(p.codigo)}</b>", kb_admin_profile(p))
+                elif action == "sched_menu":
+                    kb = {"inline_keyboard": [[{"text": "👤 Un perfil", "callback_data": "adm:sched_one_menu"}], [{"text": "👥 Varios perfiles", "callback_data": "adm:sched_multi_start"}], [{"text": "🌐 Todos", "callback_data": "adm:sched_all_start"}], [{"text": "❌ Cancelar", "callback_data": "adm:sched_cancel"}]]}
+                    enqueue_telegram(sess, chat_id, "⏰ <b>Horarios (RD)</b>\n¿A quiénes quieres aplicar el horario?", kb)
+                elif action == "sched_one_menu":
+                    if not profiles: enqueue_telegram(sess, chat_id, "Sin perfiles todavía.", kb_global())
+                    else:
+                        kb = {"inline_keyboard": [[{"text": f"{pr.codigo} (⏸️ {fmt_ampm(pr.pause_at_rd)} | ▶️ {fmt_ampm(pr.resume_at_rd)})", "callback_data": f"adm:sched_one:{pr.id}"}] for pr in profiles]}
+                        enqueue_telegram(sess, chat_id, "👤 Elige el perfil:", kb)
+                elif action == "sched_one" and len(parts) >= 3:
+                    p = sess.query(Profile).filter_by(id=int(parts[2])).first()
+                    if p:
+                        kb = {"inline_keyboard": [[{"text": "⏸️ Hora de apagado", "callback_data": f"adm:menu_pause:{p.id}"}, {"text": "▶️ Hora de encendido", "callback_data": f"adm:menu_resume:{p.id}"}]]}
+                        enqueue_telegram(sess, chat_id, f"⏰ <b>{esc(p.codigo)}</b> — Apagado {fmt_ampm(p.pause_at_rd)} | Encendido {fmt_ampm(p.resume_at_rd)} (RD)", kb)
+                elif action == "sched_multi_start":
+                    if not profiles: enqueue_telegram(sess, chat_id, "Sin perfiles todavía.", kb_global())
+                    else:
+                        _set_sched_pending(sess, chat_id, user_id, "sched_select", {"ids": []}, profiles[0].id)
+                        enqueue_telegram(sess, chat_id, "👥 Marca los perfiles (toca para ✅/⬜) y luego <b>Aplicar a marcados</b>:", _sched_toggle_kb(profiles, []))
+                elif action == "sched_toggle" and len(parts) >= 3:
+                    pend = _sched_get_pending(sess, chat_id)
+                    if pend:
+                        payload = _pend_payload(pend); ids = payload.get("ids", []); pid = int(parts[2])
+                        ids = [i for i in ids if i != pid] if pid in ids else ids + [pid]
+                        pend.payload = json.dumps({"ids": ids}); pend.expires_at = time.time()+600; sess.commit()
+                        enqueue_telegram(sess, chat_id, f"👥 Marcados: {len(ids)}. Toca para cambiar y luego <b>Aplicar a marcados</b>:", _sched_toggle_kb(profiles, ids))
+                elif action == "sched_apply":
+                    pend = _sched_get_pending(sess, chat_id)
+                    ids = _pend_payload(pend).get("ids", []) if pend else []
+                    if not ids: enqueue_telegram(sess, chat_id, "⚠️ Marca al menos un perfil primero.", _sched_toggle_kb(profiles, []))
+                    else: _sched_ask_pause(sess, chat_id, user_id, ids, {pr.id: pr for pr in profiles})
+                elif action == "sched_all_start":
+                    if not profiles: enqueue_telegram(sess, chat_id, "Sin perfiles todavía.", kb_global())
+                    else: _sched_ask_pause(sess, chat_id, user_id, [pr.id for pr in profiles], {pr.id: pr for pr in profiles})
+                elif action == "sched_set_pause":
+                    pend = _sched_get_pending(sess, chat_id)
+                    if pend:
+                        payload = _pend_payload(pend); payload["pause"] = ":".join(parts[2:]) if len(parts) > 2 else ""
+                        _sched_ask_resume(sess, chat_id, user_id, payload)
+                elif action == "sched_set_resume":
+                    pend = _sched_get_pending(sess, chat_id)
+                    if pend: _sched_finish(sess, chat_id, _pend_payload(pend), ":".join(parts[2:]) if len(parts) > 2 else "", idem)
+                elif action == "sched_cancel":
+                    sess.query(PendingInput).filter_by(chat_id=str(chat_id)).filter(PendingInput.field.like("sched%")).delete(); sess.commit()
+                    enqueue_telegram(sess, chat_id, "❌ Horarios cancelado.", kb_global())
                 elif action in ("pause", "resume", "bump", "last_bump", "menu_pause", "menu_resume", "menu_interval") and len(parts) >= 3:
                     p = sess.query(Profile).filter_by(id=int(parts[2])).first()
                     if p:
@@ -433,6 +545,15 @@ def telegram_webhook():
                 enqueue_telegram(sess, chat_id, f"🆔 El ID de este grupo es:\n<code>{esc(chat_id)}</code>"); return jsonify({"ok": True})
             # Pendiente (admin horarios o renta dirección/texto)
             pend = sess.query(PendingInput).filter_by(chat_id=chat_id).filter(PendingInput.expires_at > time.time()).order_by(PendingInput.id.desc()).first()
+            if pend and texto and not texto.startswith("/") and pend.field in ("sched_pause", "sched_resume"):
+                hora = parse_hora(texto)
+                if hora:
+                    payload = _pend_payload(pend)
+                    if pend.field == "sched_pause":
+                        payload["pause"] = hora; _sched_ask_resume(sess, chat_id, user_id, payload)
+                    else:
+                        _sched_finish(sess, chat_id, payload, hora, f"tg:{uid}")
+                    return jsonify({"ok": True})
             if pend and texto and not texto.startswith("/"):
                 p = sess.query(Profile).filter_by(id=pend.profile_id).first()
                 if p:
@@ -452,7 +573,10 @@ def telegram_webhook():
                         enqueue_telegram(sess, chat_id, "✅ Texto actualizado. Candado de 24 h activado 🔒"); send_rental_menu(sess, chat_id, p); return jsonify({"ok": True})
             if is_admin:
                 profiles = sess.query(Profile).order_by(Profile.id).all()
-                if texto in ("📊 Ver Estados (🟢/🔴)", "/estado"):
+                if texto == "⏰ Horarios":
+                    kb = {"inline_keyboard": [[{"text": "👤 Un perfil", "callback_data": "adm:sched_one_menu"}], [{"text": "👥 Varios perfiles", "callback_data": "adm:sched_multi_start"}], [{"text": "🌐 Todos", "callback_data": "adm:sched_all_start"}], [{"text": "❌ Cancelar", "callback_data": "adm:sched_cancel"}]]}
+                    enqueue_telegram(sess, chat_id, "⏰ <b>Horarios (RD)</b>\n¿A quiénes quieres aplicar el horario?", kb)
+                elif texto in ("📊 Ver Estados (🟢/🔴)", "/estado"):
                     enqueue_telegram(sess, chat_id, "📊 <b>ESTADO GENERAL</b>\n" + "\n".join(profile_status_line(p) for p in profiles), kb_global())
                 elif texto == "📸 Foto de Todos":
                     fan_out(sess, profiles, "photo", {"reason": "admin"}, f"tg:{uid}"); enqueue_telegram(sess, chat_id, f"📸 Foto solicitada a {len(profiles)} perfiles (escalonada).", kb_global())
@@ -539,6 +663,30 @@ def toggle_profile(pid):
     if p:
         apply_desired(sess, p, paused=not p.paused)
         make_command(sess, p, "pause" if p.paused else "resume", {"reason": "panel"}, f"panel:{pid}:{int(time.time())}"); sess.commit()
+    sess.close(); return redirect(url_for("index"))
+
+@app.route("/schedules/apply", methods=["POST"])
+@login_required
+def apply_schedule():
+    check_csrf(); sess = db()
+    if request.form.get("all_profiles") == "1":
+        targets = sess.query(Profile).all()
+    else:
+        ids = [int(x) for x in request.form.getlist("profile_ids") if str(x).isdigit()]
+        targets = sess.query(Profile).filter(Profile.id.in_(ids)).all() if ids else []
+    clear = request.form.get("clear_schedule") == "1"
+    pause_val = "" if clear else request.form.get("pause_at_rd", "").strip()
+    resume_val = "" if clear else request.form.get("resume_at_rd", "").strip()
+    for pr in targets:
+        apply_desired(sess, pr, pause_at_rd=pause_val, resume_at_rd=resume_val)
+        make_command(sess, pr, "set_config", {"pause_at_rd": pr.pause_at_rd, "resume_at_rd": pr.resume_at_rd, "interval_min": pr.interval_min}, f"panel:{int(time.time())}")
+    sess.commit(); sess.close(); return redirect(url_for("index"))
+
+@app.route("/profiles/<int:pid>/photo", methods=["POST"])
+@login_required
+def photo_profile(pid):
+    check_csrf(); sess = db(); p = sess.query(Profile).filter_by(id=pid).first()
+    if p: make_command(sess, p, "photo", {"reason": "panel"}, f"panel:{int(time.time())}"); sess.commit()
     sess.close(); return redirect(url_for("index"))
 
 @app.route("/profiles/<int:pid>/delete", methods=["POST"])
@@ -653,6 +801,8 @@ def api_report_bump():
                f"📞 <b>Teléfono:</b> {esc(p.telefono or 'N/A')}\n📍 <b>Ubicación:</b> {esc(p.ubicacion or 'N/A')}\n🟢 <b>Estado:</b> {'PAUSADA' if p.paused else 'ACTIVA'}\n"
                f"🕒 <b>Hora (RD):</b> {hora}\n📊 <b>Bumps hoy:</b> {p.bumps_today} | <b>Total:</b> {p.bumps_total}")
     kb = None if (p.is_rental and destino == p.client_chat_id) else kb_admin_profile(p)
+    if kind == "photo" and not photo_path:
+        caption += "\n📷 Sin imagen: la ventana no estaba visible al capturar."
     enqueue_telegram(sess, destino, text=caption, reply_markup=kb, photo_path=photo_path, caption=caption)
     sess.close(); return jsonify({"ok": True})
 
