@@ -307,16 +307,26 @@ def profile_status_line(p):
 
 def send_rental_menu(sess, chat_id, p):
     if p.rental_expired:
-        enqueue_telegram(sess, chat_id, "🔒 Tu renta venció. Escribe a soporte para renovar."); return
+        kb = {"inline_keyboard": [[{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}], [{"text": "🆘 Ayuda / Soporte", "callback_data": f"renta_help_{p.id}"}]]}
+        enqueue_telegram(sess, chat_id, "🔒 Tu renta venció. Toca <b>Pagar servicio</b> para renovar o escribe a soporte.", kb); return
     now = time.time(); left = 86400 - (now - float(p.last_text_edit_at or 0))
     btn_edit = "✏️ Editar Texto (Disponible)" if left <= 0 else f"🔒 Editar Texto ({int(left//3600)}h {int((left%3600)//60)}m)"
-    vence = p.rental_expires_at.astimezone(RD_TZ).strftime("%d/%m/%Y %I:%M %p") if p.rental_expires_at else "Consultar con soporte"
+    vence = p.rental_expires_at.astimezone(RD_TZ).strftime("%A %d/%m/%Y %I:%M %p") if p.rental_expires_at else "Consultar con soporte"
+    faltan = ""
+    if p.rental_expires_at:
+        _exp = p.rental_expires_at if p.rental_expires_at.tzinfo else p.rental_expires_at.replace(tzinfo=timezone.utc)
+        seg = int((_exp - now_utc()).total_seconds())
+        if seg > 0: faltan = f" (Faltan {seg//86400}d {seg%86400//3600}h)"
+    prox = p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if p.next_bump_at_utc else "—"
     txt = (f"📋 <b>CONTROL DE TU ANUNCIO ({esc(p.codigo)})</b>\n\n• <b>Estado:</b> {'🟢 ACTIVO' if not p.paused else '🔴 PAUSADO'}\n"
-           f"• <b>Ubicación:</b> {esc(p.ubicacion or 'Sin definir')}\n• <b>Vence renta:</b> {esc(vence)}\n• <b>Fotos / Borrado:</b> 🔒 Bloqueados por seguridad\n\nToca un botón:")
+           f"• <b>Ubicación:</b> {esc(p.ubicacion or 'Sin definir')}\n• <b>⏳ Vence renta:</b> {esc(vence)}{faltan}\n"
+           f"• <b>🔥 Próximo bump:</b> {prox} (RD) · <b>Bumps hoy:</b> {p.bumps_today}\n• <b>Fotos / Borrado:</b> 🔒 Bloqueados por seguridad\n\nToca un botón:")
     kb = {"inline_keyboard": [
         [{"text": "⏸️ Pausar Anuncio" if not p.paused else "▶️ Encender Anuncio", "callback_data": f"renta_toggle_{p.id}"}],
+        [{"text": "📸 Ver foto de mi anuncio", "callback_data": f"renta_foto_{p.id}"}],
         [{"text": "📍 Cambiar Dirección", "callback_data": f"renta_dir_{p.id}"}],
         [{"text": btn_edit, "callback_data": f"renta_edit_{p.id}"}],
+        [{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}],
         [{"text": "🆘 Ayuda / Soporte", "callback_data": f"renta_help_{p.id}"}]]}
     enqueue_telegram(sess, chat_id, txt, kb)
 
@@ -511,8 +521,13 @@ def telegram_webhook():
                 p = sess.query(Profile).filter_by(id=pid, client_chat_id=chat_id, is_rental=True).first()
                 if data.startswith("sop_"):
                     p2 = sess.query(Profile).filter_by(id=pid).first()
+                    if data.startswith("sop_estafa_"):
+                        enqueue_telegram(sess, chat_id, "🚨 <b>Cuidado con mensajes falsos</b>\nSi te mandan un enlace raro diciendo que es de MegaPersonals o de soporte, <b>es una estafa</b>. No pagues ni des tu clave fuera de este chat. Ante la duda, escríbenos por Ayuda.")
+                        return jsonify({"ok": True})
+                    motivos = {"sop_nosube_": "Mi página no está subiendo", "sop_bloqueo_": "Creo que mi post se bloqueó", "sop_editar_": "Problema editando mi página", "sop_consejos_": "Consejos para vender más", "sop_nuevo_": "Quiero rentar un anuncio nuevo más", "sop_pagar_": "Quiere pagar / renovar servicio"}
+                    motivo = next((v for k, v in motivos.items() if data.startswith(k)), "Solicitud de soporte")
                     enqueue_telegram(sess, chat_id, "✅ Tu solicitud fue enviada al administrador.")
-                    if p2 and ADMIN_CHAT_ID: enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nCliente: {esc(p2.client_name or chat_id)}\nPerfil: <b>{esc(p2.codigo)}</b>")
+                    if p2 and ADMIN_CHAT_ID: enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nMotivo: {esc(motivo)}\nCliente: {esc(p2.client_name or chat_id)}\nPerfil: <b>{esc(p2.codigo)}</b>")
                     return jsonify({"ok": True})
                 if not p: return jsonify({"ok": True})
                 if p.rental_expired:
@@ -532,9 +547,12 @@ def telegram_webhook():
                         enqueue_telegram(sess, chat_id, f"🔒 Edición bloqueada por 24 h. Disponible en {int(left//3600)}h {int((left%3600)//60)}m.")
                     else:
                         set_pending(sess, p, chat_id, user_id, "texto"); enqueue_telegram(sess, chat_id, "✏️ Escribe el nuevo texto (luego se bloquea 24 h):")
+                elif data.startswith("renta_foto_"):
+                    make_command(sess, p, "photo", {"reason": "rental"}, idem); sess.commit()
+                    enqueue_telegram(sess, chat_id, "📸 Foto solicitada. En 1-2 minutos te llega la captura de tu anuncio.")
                 elif data.startswith("renta_help_"):
-                    kb = {"inline_keyboard": [[{"text": "⚠️ Mi página no está subiendo", "callback_data": f"sop_nosube_{p.id}"}], [{"text": "➕ Quiero rentar otro anuncio", "callback_data": f"sop_nuevo_{p.id}"}]]}
-                    enqueue_telegram(sess, chat_id, "🎧 <b>Centro de Soporte</b>\nSelecciona qué necesitas:", kb)
+                    kb = {"inline_keyboard": [[{"text": "💡 Consejos para vender más", "callback_data": f"sop_consejos_{p.id}"}], [{"text": "🚨 Cuidado con mensajes falsos", "callback_data": f"sop_estafa_{p.id}"}], [{"text": "🚫 Mi página no está subiendo", "callback_data": f"sop_nosube_{p.id}"}], [{"text": "🔒 Creo que mi post se bloqueó", "callback_data": f"sop_bloqueo_{p.id}"}], [{"text": "✏️ Problema editando mi página", "callback_data": f"sop_editar_{p.id}"}], [{"text": "➕ Quiero rentar un anuncio nuevo más", "callback_data": f"sop_nuevo_{p.id}"}], [{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}]]}
+                    enqueue_telegram(sess, chat_id, "🎧 <b>Centro de Soporte</b>\n¿En qué podemos ayudarte?", kb)
                 return jsonify({"ok": True})
             return jsonify({"ok": True})
         # Mensajes de texto
@@ -801,6 +819,10 @@ def api_report_bump():
                f"📞 <b>Teléfono:</b> {esc(p.telefono or 'N/A')}\n📍 <b>Ubicación:</b> {esc(p.ubicacion or 'N/A')}\n🟢 <b>Estado:</b> {'PAUSADA' if p.paused else 'ACTIVA'}\n"
                f"🕒 <b>Hora (RD):</b> {hora}\n📊 <b>Bumps hoy:</b> {p.bumps_today} | <b>Total:</b> {p.bumps_total}")
     kb = None if (p.is_rental and destino == p.client_chat_id) else kb_admin_profile(p)
+    if p.is_rental and destino == p.client_chat_id:
+        vence = p.rental_expires_at.astimezone(RD_TZ).strftime("%d/%m/%Y") if p.rental_expires_at else "Consultar"
+        prox = p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if p.next_bump_at_utc else "—"
+        caption += f"\n⏳ <b>Vence renta:</b> {vence}\n🔥 <b>Próximo bump:</b> {prox} (RD)"
     if kind == "photo" and not photo_path:
         caption += "\n📷 Sin imagen: la ventana no estaba visible al capturar."
     enqueue_telegram(sess, destino, text=caption, reply_markup=kb, photo_path=photo_path, caption=caption)
