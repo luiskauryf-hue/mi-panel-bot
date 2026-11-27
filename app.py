@@ -123,7 +123,7 @@ except Exception:
 app = Flask(__name__)
 
 LOGIN_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11 — Acceso</title>\n<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:#1e293b;padding:24px;border-radius:12px;width:min(92vw,360px)}input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #475569;margin-top:8px;box-sizing:border-box}button{background:#059669;color:#fff;border:0;font-weight:700}.err{color:#fda4af}</style></head>\n<body><form class="card" method="post"><h1>Panel SEBASTIÁN MEGA v11</h1>{% if error %}<p class="err">{{error}}</p>{% endif %}<label>Contraseña del panel<input type="password" name="password" required autofocus></label><button>Entrar</button></form></body></html>\n'
-INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
+INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><input name="foto_url" value="{{p.foto_url or \'\'}}" placeholder="URL foto de la modelo"><input name="enlace_anuncio" value="{{p.enlace_anuncio or \'\'}}" placeholder="Enlace del anuncio"><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
 
 def render_page(name, **ctx):
     # Siempre usar las pantallas v11 de adentro del archivo.
@@ -728,6 +728,8 @@ def edit_profile(pid):
             try: p.rental_expires_at = datetime.fromisoformat(vence_raw).replace(tzinfo=RD_TZ).astimezone(timezone.utc); p.rental_expired = False
             except Exception: pass
         p.is_rental = request.form.get("is_rental") == "1"; p.client_chat_id = request.form.get("client_chat_id", p.client_chat_id); p.client_name = request.form.get("client_name", p.client_name)
+        if "foto_url" in request.form: p.foto_url = request.form.get("foto_url", "").strip()
+        if "enlace_anuncio" in request.form: p.enlace_anuncio = request.form.get("enlace_anuncio", "").strip()
         make_command(sess, p, "set_config", {"pause_at_rd": p.pause_at_rd, "resume_at_rd": p.resume_at_rd, "interval_min": p.interval_min}, f"panel-edit:{pid}:{int(time.time())}"); sess.commit()
     sess.close(); return redirect(url_for("index"))
 
@@ -798,6 +800,36 @@ def api_set_paused():
     body = request.get_json(silent=True) or {}; apply_desired(sess, p, paused=bool(body.get("paused"))); sess.commit()
     out = desired_payload(p); sess.close(); return jsonify({"ok": True, "desired": out})
 
+def _download_photo(url):
+    try:
+        r = requests.get(url, timeout=15, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if r.ok and ("image" in ctype or url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp"))):
+            data = r.raw.read(10 * 1024 * 1024 + 1, decode_content=True)
+            if 0 < len(data) <= 10 * 1024 * 1024:
+                ext = ".png" if "png" in ctype else ".jpg"
+                path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}")
+                with open(path, "wb") as fh: fh.write(data)
+                return path
+    except Exception:
+        pass
+    return ""
+
+def _photo_from_ad_page(page_url):
+    # Busca la foto principal del anuncio (og:image) en la página pública del anuncio.
+    try:
+        r = requests.get(page_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if not r.ok: return ""
+        html = r.text[:2 * 1024 * 1024]
+        import re as _re
+        m = _re.search(r'property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html) or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html)
+        if m:
+            from urllib.parse import urljoin
+            return _download_photo(urljoin(page_url, m.group(1)))
+    except Exception:
+        pass
+    return ""
+
 @app.route("/api/v1/report-bump", methods=["POST"])
 def api_report_bump():
     sess = db(); p = auth_profile(sess)
@@ -808,22 +840,14 @@ def api_report_bump():
     uploaded_path = ""
     if f and f.filename:
         ext = os.path.splitext(f.filename)[1][:10] or ".jpg"; uploaded_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}"); f.save(uploaded_path)
-    if True:
-        # Foto limpia del anuncio (como v10): la extensión manda la URL de la foto de la modelo
-        # y el servidor la descarga (sin problemas de CORS). Solo URLs http/https públicas.
-        foto_url = (request.form.get("foto_url") or "").strip()
-        if foto_url.startswith(("http://", "https://")):
-            try:
-                r = requests.get(foto_url, timeout=15, stream=True, headers={"User-Agent": "Mozilla/5.0"})
-                ctype = (r.headers.get("Content-Type") or "").lower()
-                if r.ok and ("image" in ctype or foto_url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp"))):
-                    data = r.raw.read(10 * 1024 * 1024 + 1, decode_content=True)
-                    if 0 < len(data) <= 10 * 1024 * 1024:
-                        ext = ".png" if "png" in ctype else ".jpg"
-                        photo_path = os.path.join(UPLOAD_DIR, f"{secrets.token_hex(12)}{ext}")
-                        with open(photo_path, "wb") as fh: fh.write(data)
-            except Exception:
-                photo_path = ""
+    # Foto limpia del anuncio (como v10), en orden: URL que manda la extensión ->
+    # URL foto guardada en el perfil (panel) -> foto principal de la página del anuncio.
+    for _cand in [(request.form.get("foto_url") or "").strip(), (p.foto_url or "").strip()]:
+        if _cand.startswith(("http://", "https://")):
+            photo_path = _download_photo(_cand)
+            if photo_path: break
+    if not photo_path and (p.enlace_anuncio or "").strip().startswith(("http://", "https://")):
+        photo_path = _photo_from_ad_page(p.enlace_anuncio.strip())
     if not photo_path:
         photo_path = uploaded_path
     if kind == "bump":
@@ -846,6 +870,10 @@ def api_report_bump():
         caption += f"\n⏳ <b>Vence renta:</b> {vence}\n🔥 <b>Próximo bump:</b> {prox} (RD)"
     if kind == "photo" and not photo_path:
         caption += "\n📷 Sin imagen: no se pudo obtener la foto del anuncio ni capturar la pantalla."
+    # Diagnóstico: si la foto que se manda es la captura (no la limpia), mostrar qué imágenes vio la extensión.
+    _dbg = (request.form.get("debug_imgs") or "").strip()
+    if _dbg and not (request.form.get("foto_url") or "").strip():
+        caption += f"\n🔎 Imágenes en la página: {esc(_dbg[:350])}"
     enqueue_telegram(sess, destino, text=caption, reply_markup=kb, photo_path=photo_path, caption=caption)
     sess.close(); return jsonify({"ok": True})
 
