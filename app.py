@@ -22,6 +22,14 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD", "")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", TELEGRAM_WEBHOOK_SECRET)
 OUTBOUND_ENABLED = os.environ.get("OUTBOUND_ENABLED", "1") == "1"
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")  # opcional: URL pública del servicio (para el botón de la mini app)
+
+def public_base_url():
+    if PUBLIC_URL: return PUBLIC_URL
+    try:
+        if request and request.host_url: return request.host_url.rstrip("/")
+    except Exception: pass
+    return "https://mi-panel-bot.onrender.com"
 TG_TIMEOUT = 10
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -307,7 +315,7 @@ def profile_status_line(p):
 
 def send_rental_menu(sess, chat_id, p):
     if p.rental_expired:
-        kb = {"inline_keyboard": [[{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}], [{"text": "🆘 Ayuda / Soporte", "callback_data": f"renta_help_{p.id}"}]]}
+        kb = {"inline_keyboard": [[{"text": "📋 Abrir mi anuncio", "web_app": {"url": public_base_url() + "/renta/app"}}], [{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}], [{"text": "🆘 Ayuda / Soporte", "callback_data": f"renta_help_{p.id}"}]]}
         enqueue_telegram(sess, chat_id, "🔒 Tu renta venció. Toca <b>Pagar servicio</b> para renovar o escribe a soporte.", kb); return
     now = time.time(); left = 86400 - (now - float(p.last_text_edit_at or 0))
     btn_edit = "✏️ Editar Texto (Disponible)" if left <= 0 else f"🔒 Editar Texto ({int(left//3600)}h {int((left%3600)//60)}m)"
@@ -322,6 +330,7 @@ def send_rental_menu(sess, chat_id, p):
            f"• <b>Ubicación:</b> {esc(p.ubicacion or 'Sin definir')}\n• <b>⏳ Vence renta:</b> {esc(vence)}{faltan}\n"
            f"• <b>🔥 Próximo bump:</b> {prox} (RD) · <b>Bumps hoy:</b> {p.bumps_today}\n• <b>Fotos / Borrado:</b> 🔒 Bloqueados por seguridad\n\nToca un botón:")
     kb = {"inline_keyboard": [
+        [{"text": "📋 Abrir mi anuncio", "web_app": {"url": public_base_url() + "/renta/app"}}],
         [{"text": "⏸️ Pausar Anuncio" if not p.paused else "▶️ Encender Anuncio", "callback_data": f"renta_toggle_{p.id}"}],
         [{"text": "📸 Ver foto de mi anuncio", "callback_data": f"renta_foto_{p.id}"}],
         [{"text": "📍 Cambiar Dirección", "callback_data": f"renta_dir_{p.id}"}],
@@ -524,7 +533,7 @@ def telegram_webhook():
                     if data.startswith("sop_estafa_"):
                         enqueue_telegram(sess, chat_id, "🚨 <b>Cuidado con mensajes falsos</b>\nSi te mandan un enlace raro diciendo que es de MegaPersonals o de soporte, <b>es una estafa</b>. No pagues ni des tu clave fuera de este chat. Ante la duda, escríbenos por Ayuda.")
                         return jsonify({"ok": True})
-                    motivos = {"sop_nosube_": "Mi página no está subiendo", "sop_bloqueo_": "Creo que mi post se bloqueó", "sop_editar_": "Problema editando mi página", "sop_consejos_": "Consejos para vender más", "sop_nuevo_": "Quiero rentar un anuncio nuevo más", "sop_pagar_": "Quiere pagar / renovar servicio"}
+                    motivos = {"sop_nosube_": "Mi página no está subiendo", "sop_bloqueo_": "Creo que mi post se bloqueó", "sop_editar_": "Problema editando mi página", "sop_consejos_": "Consejos para vender más", "sop_nuevo_": "Quiero rentar un anuncio nuevo más", "sop_pagar_": "Quiere pagar / renovar servicio", "sop_direccion_": "Quiere cambiar su dirección"}
                     motivo = next((v for k, v in motivos.items() if data.startswith(k)), "Solicitud de soporte")
                     enqueue_telegram(sess, chat_id, "✅ Tu solicitud fue enviada al administrador.")
                     if p2 and ADMIN_CHAT_ID: enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nMotivo: {esc(motivo)}\nCliente: {esc(p2.client_name or chat_id)}\nPerfil: <b>{esc(p2.codigo)}</b>")
@@ -536,11 +545,9 @@ def telegram_webhook():
                     apply_desired(sess, p, paused=not p.paused)
                     make_command(sess, p, "pause" if p.paused else "resume", {"reason": "rental"}, idem); sess.commit(); send_rental_menu(sess, chat_id, p)
                 elif data.startswith("renta_dir_"):
-                    if time.time() - float(p.last_location_edit_at or 0) < 86400:
-                        left = 86400 - (time.time() - float(p.last_location_edit_at or 0))
-                        enqueue_telegram(sess, chat_id, f"🔒 Solo puedes cambiar la ubicación una vez cada 24 h. Disponible en {int(left//3600)}h {int((left%3600)//60)}m.")
-                    else:
-                        set_pending(sess, p, chat_id, user_id, "ubicacion"); enqueue_telegram(sess, chat_id, "📍 Escribe la nueva dirección o zona:")
+                    # Regla de Luis: la cliente no cambia la dirección; la hace el admin desde el panel.
+                    enqueue_telegram(sess, chat_id, "📍 El cambio de dirección lo hace soporte por ti. Ya avisamos al administrador y te atiende en este chat.")
+                    if ADMIN_CHAT_ID: enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nMotivo: Quiere cambiar su dirección\nCliente: {esc(p.client_name or chat_id)}\nPerfil: <b>{esc(p.codigo)}</b>")
                 elif data.startswith("renta_edit_"):
                     if time.time() - float(p.last_text_edit_at or 0) < 86400:
                         left = 86400 - (time.time() - float(p.last_text_edit_at or 0))
@@ -551,7 +558,7 @@ def telegram_webhook():
                     make_command(sess, p, "photo", {"reason": "rental"}, idem); sess.commit()
                     enqueue_telegram(sess, chat_id, "📸 Foto solicitada. En 1-2 minutos te llega la captura de tu anuncio.")
                 elif data.startswith("renta_help_"):
-                    kb = {"inline_keyboard": [[{"text": "💡 Consejos para vender más", "callback_data": f"sop_consejos_{p.id}"}], [{"text": "🚨 Cuidado con mensajes falsos", "callback_data": f"sop_estafa_{p.id}"}], [{"text": "🚫 Mi página no está subiendo", "callback_data": f"sop_nosube_{p.id}"}], [{"text": "🔒 Creo que mi post se bloqueó", "callback_data": f"sop_bloqueo_{p.id}"}], [{"text": "✏️ Problema editando mi página", "callback_data": f"sop_editar_{p.id}"}], [{"text": "➕ Quiero rentar un anuncio nuevo más", "callback_data": f"sop_nuevo_{p.id}"}], [{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}]]}
+                    kb = {"inline_keyboard": [[{"text": "💡 Consejos para vender más", "callback_data": f"sop_consejos_{p.id}"}], [{"text": "🚨 Cuidado con mensajes falsos", "callback_data": f"sop_estafa_{p.id}"}], [{"text": "🚫 Mi página no está subiendo", "callback_data": f"sop_nosube_{p.id}"}], [{"text": "🔒 Creo que mi post se bloqueó", "callback_data": f"sop_bloqueo_{p.id}"}], [{"text": "✏️ Problema editando mi página", "callback_data": f"sop_editar_{p.id}"}], [{"text": "➕ Quiero rentar un anuncio nuevo más", "callback_data": f"sop_nuevo_{p.id}"}], [{"text": "📍 Quiero cambiar mi dirección", "callback_data": f"sop_direccion_{p.id}"}], [{"text": "💚 Pagar servicio / Renovar", "callback_data": f"sop_pagar_{p.id}"}]]}
                     enqueue_telegram(sess, chat_id, "🎧 <b>Centro de Soporte</b>\n¿En qué podemos ayudarte?", kb)
                 return jsonify({"ok": True})
             return jsonify({"ok": True})
@@ -584,8 +591,9 @@ def telegram_webhook():
                         apply_desired(sess, p, interval_min=int(texto)); make_command(sess, p, "set_config", {"interval_min": int(texto)}, f"tg:{uid}"); sess.commit()
                         sess.delete(pend); sess.commit(); enqueue_telegram(sess, chat_id, f"✅ Intervalo de <b>{esc(p.codigo)}</b>: {texto} min", kb_admin_profile(p)); return jsonify({"ok": True})
                     elif pend.field == "ubicacion" and p.client_chat_id == chat_id:
-                        p.ubicacion = texto; p.last_location_edit_at = time.time(); sess.delete(pend); sess.commit()
-                        enqueue_telegram(sess, chat_id, f"✅ Dirección actualizada a: <b>{esc(texto)}</b>"); send_rental_menu(sess, chat_id, p); return jsonify({"ok": True})
+                        # Regla de Luis: la dirección ya no se guarda desde el chat del cliente.
+                        sess.delete(pend); sess.commit()
+                        enqueue_telegram(sess, chat_id, "📍 El cambio de dirección lo hace soporte por ti. Escríbenos por 🆘 Ayuda / Soporte."); return jsonify({"ok": True})
                     elif pend.field == "texto" and p.client_chat_id == chat_id:
                         p.texto = texto; p.last_text_edit_at = time.time(); sess.delete(pend); sess.commit()
                         enqueue_telegram(sess, chat_id, "✅ Texto actualizado. Candado de 24 h activado 🔒"); send_rental_menu(sess, chat_id, p); return jsonify({"ok": True})
@@ -802,7 +810,7 @@ def api_set_paused():
 
 def _download_photo(url):
     try:
-        r = requests.get(url, timeout=15, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=10, stream=True, headers={"User-Agent": "Mozilla/5.0"})
         ctype = (r.headers.get("Content-Type") or "").lower()
         if r.ok and ("image" in ctype or url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp"))):
             data = r.raw.read(10 * 1024 * 1024 + 1, decode_content=True)
@@ -818,7 +826,7 @@ def _download_photo(url):
 def _photo_from_ad_page(page_url):
     # Busca la foto principal del anuncio (og:image) en la página pública del anuncio.
     try:
-        r = requests.get(page_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(page_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         if not r.ok: return ""
         html = r.text[:2 * 1024 * 1024]
         import re as _re
@@ -835,6 +843,10 @@ def api_report_bump():
     sess = db(); p = auth_profile(sess)
     if not p: sess.close(); return jsonify({"ok": False}), 401
     kind = request.form.get("kind", "bump")  # bump|photo
+    if kind == "bump" and p.last_bump_at_utc is not None:
+        _lb = p.last_bump_at_utc if p.last_bump_at_utc.tzinfo else p.last_bump_at_utc.replace(tzinfo=timezone.utc)
+        if (now_utc() - _lb).total_seconds() < 120:
+            sess.close(); return jsonify({"ok": True, "dedup": True})  # reporte repetido: no duplicar
     photo_path = ""
     f = request.files.get("captura") or request.files.get("photo")
     uploaded_path = ""
@@ -886,6 +898,318 @@ def api_perfil_legacy(dolphin_id):
     if not p or not key or not hmac.compare_digest(hash_key(key), p.api_key_hash or ""): sess.close(); return jsonify({"ok": False, "error": "auth"}), 401
     out = {"ok": True, **desired_payload(p), "dolphin_id": p.dolphin_id, "modelo": p.modelo, "foto_url": p.foto_url, "estado": "PAUSADA" if p.paused else "ACTIVA"}
     sess.close(); return jsonify(out)
+
+# ---------- Mini App de renta (Web App de Telegram, estética MegaPersonals) ----------
+def validate_init_data(init_data):
+    """Valida el initData de Telegram WebApp con HMAC-SHA256 (doc oficial de Telegram).
+    Devuelve {"user": {...}, "auth_date": int} o None si no es válido."""
+    if not init_data or not TELEGRAM_BOT_TOKEN: return None
+    try:
+        from urllib.parse import parse_qsl
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+        recv_hash = pairs.pop("hash", "")
+        if not recv_hash: return None
+        dcs = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+        secret = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode(), hashlib.sha256).digest()
+        calc = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calc, recv_hash): return None
+        auth_date = int(pairs.get("auth_date", "0") or 0)
+        if auth_date and time.time() - auth_date > 7 * 86400: return None
+        user = json.loads(pairs.get("user", "{}") or "{}")
+        if not user.get("id"): return None
+        return {"user": user, "auth_date": auth_date}
+    except Exception:
+        return None
+
+def rental_from_init_data(sess):
+    """Autentica al cliente por initData y devuelve (perfil, None) o (None, respuesta_error).
+    Aislamiento: el perfil se busca SOLO por el user.id firmado por Telegram; nunca se
+    acepta un profile_id enviado por el cliente."""
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data:
+        body = request.get_json(silent=True) or {}
+        init_data = body.get("init_data", "") or ""
+    data = validate_init_data(init_data)
+    if not data:
+        return None, (jsonify({"ok": False, "error": "sin_autorizacion", "message": "Ábrelo desde el bot de Telegram."}), 401)
+    p = sess.query(Profile).filter_by(client_chat_id=str(data["user"]["id"]), is_rental=True).first()
+    if not p:
+        return None, (jsonify({"ok": False, "error": "sin_perfil", "message": "No tienes un anuncio de renta activo. Escribe a soporte."}), 403)
+    return p, None
+
+def rental_status_payload(p):
+    now = time.time()
+    def lock_left(ts): return max(0.0, 86400 - (now - float(ts or 0)))
+    exp = p.rental_expires_at
+    if exp is not None and exp.tzinfo is None: exp = exp.replace(tzinfo=timezone.utc)
+    vence = exp.astimezone(RD_TZ).strftime("%A %d/%m/%Y %I:%M %p") if exp else "Consultar con soporte"
+    vence_corto = exp.astimezone(RD_TZ).strftime("%d/%m") if exp else ""
+    faltan = ""
+    if exp:
+        seg = int((exp - now_utc()).total_seconds())
+        if seg > 0: faltan = f"{seg//86400}d {seg%86400//3600}h"
+    prox = p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if (p.next_bump_at_utc and not p.paused) else "—"
+    lt = lock_left(p.last_text_edit_at)
+    return {"ok": True, "codigo": p.codigo,
+            "estado": "VENCIDO" if p.rental_expired else ("PAUSADO" if p.paused else "ACTIVO"),
+            "paused": bool(p.paused), "rental_expired": bool(p.rental_expired),
+            "ubicacion": p.ubicacion or "", "texto": p.texto or "",
+            "vence": vence, "vence_corto": vence_corto, "faltan": faltan,
+            "proximo_bump": prox, "bumps_hoy": p.bumps_today or 0,
+            "foto_url": p.foto_url or "",
+            "edit_texto_disponible": lt <= 0, "edit_texto_faltan_h": round(lt / 3600, 1) if lt > 0 else 0}
+
+def _renta_expired_block(p):
+    if p.rental_expired:
+        return jsonify({"ok": False, "error": "renta_vencida", "message": "🔒 Tu renta venció. Toca PAGAR SERVICIO para renovar."}), 403
+    return None
+
+def _renta_admin_alert(sess, p, motivo):
+    if ADMIN_CHAT_ID:
+        enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nMotivo: {esc(motivo)}\nCliente: {esc(p.client_name or p.client_chat_id)}\nPerfil: <b>{esc(p.codigo)}</b>")
+
+RENTA_APP_HTML = """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mi anuncio — MegaPersonals</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fdf2f8}
+.wrap{max-width:420px;margin:0 auto;background:#fdf2f8;min-height:100vh}
+.head{background:linear-gradient(135deg,#ec4899,#a855f7);color:#fff;text-align:center;padding:14px 8px;font-size:24px;font-weight:900;letter-spacing:1px;text-shadow:1px 1px 2px rgba(0,0,0,.35)}
+.body{padding:12px}
+.row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.cur{font-weight:900;color:#9d174d;font-size:16px}
+.badge{background:#f59e0b;color:#fff;font-weight:900;font-size:13px;padding:5px 12px;border-radius:999px}
+.foto{background:linear-gradient(160deg,#fbcfe8,#e9d5ff);border:2px dashed #ec4899;border-radius:12px;min-height:130px;display:flex;align-items:center;justify-content:center;color:#9d174d;font-weight:700;font-size:15px;text-align:center;overflow:hidden}
+.foto img{width:100%;display:block}
+.estado{text-align:center;color:#831843;font-size:14px;margin:8px 0;font-weight:700}
+.bumpbox{background:#fff;border:1px solid #f9a8d4;border-radius:12px;text-align:center;padding:10px;margin:10px 0;color:#9d174d}
+.b1{font-size:13px;font-weight:700}.b2{font-size:28px;font-weight:900}.b3{font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn{border:none;border-radius:10px;padding:16px 4px;font-size:16px;font-weight:900;color:#fff;cursor:pointer;width:100%}
+.btn:disabled{opacity:.45}
+.red{background:#dc2626}.blue{background:#2563eb}.orange{background:#ea580c}.pink{background:#db2777}.green{background:#16a34a}.purple{background:#7c3aed}
+.wide{margin-top:8px}
+.foto-btn{background:#fff;color:#db2777;border:2px solid #db2777}
+.row2{display:flex;gap:8px;margin-top:8px}.row2 .btn{flex:1;padding:13px 4px;font-size:14px}
+.note{text-align:center;color:#9d174d;font-size:12px;margin-top:10px}
+.panel{background:#fff;border:1px solid #f9a8d4;border-radius:12px;padding:12px;margin-top:12px}
+.panel h3{margin:0 0 8px;color:#9d174d}
+.panel label{display:block;font-size:13px;font-weight:700;color:#831843;margin-top:10px}
+.panel textarea,.panel input{width:100%;padding:10px;border:1px solid #f9a8d4;border-radius:8px;font-size:15px;margin-top:4px}
+.sup{background:#fdf2f8;color:#9d174d;border:1px solid #f9a8d4;padding:12px 8px;font-size:14px;margin-top:8px;text-align:left}
+.msg{border-radius:10px;padding:12px;margin-top:12px;font-size:15px;text-align:center;font-weight:700}
+.msg.ok{background:#dcfce7;color:#166534}.msg.err{background:#fee2e2;color:#991b1b}
+.vencido{background:#fee2e2;color:#991b1b;border-radius:10px;padding:12px;text-align:center;font-weight:700;margin-bottom:10px}
+.sinbot{max-width:420px;margin:40px auto;background:#fff;border:2px solid #ec4899;border-radius:16px;padding:24px;text-align:center;color:#9d174d;font-size:18px;font-weight:700}
+.sinbot small{display:block;margin-top:8px;font-size:14px;font-weight:400}
+</style></head>
+<body>
+<div id="sinbot" class="sinbot" style="display:none">📲 Ábrelo desde el bot de Telegram<small>Abre tu chat con el bot y toca «📋 Abrir mi anuncio».</small></div>
+<div id="app" style="display:none"><div class="wrap">
+  <div class="head">MegaPersonals</div>
+  <div class="body">
+    <div id="vencido" class="vencido" style="display:none">🔒 Tu renta venció. Toca <b>PAGAR SERVICIO</b> para renovar.</div>
+    <div class="row"><span class="cur">CURRENT POST</span><span class="badge" id="venceBadge">VENCE</span></div>
+    <div class="foto" id="fotoBox"><span id="fotoTxt">Foto de tu anuncio</span><img id="fotoImg" style="display:none" alt=""></div>
+    <div class="estado" id="estadoTxt"></div>
+    <div class="bumpbox"><div class="b1">PRÓXIMO BUMP</div><div class="b2" id="proxBump">—</div><div class="b3" id="bumpsHoy"></div></div>
+    <div class="grid">
+      <button class="btn red" id="btnEdit">EDIT POST</button>
+      <button class="btn blue" id="btnNew">🔒 WRITE NEW</button>
+      <button class="btn orange" id="btnRemove">🔒 REMOVE POST</button>
+      <button class="btn blue" id="btnBump">BUMP TO TOP</button>
+    </div>
+    <button class="btn pink wide" id="btnToggle">PAUSAR ANUNCIO</button>
+    <button class="btn foto-btn wide" id="btnFoto">📸 VER FOTO DE MI ANUNCIO</button>
+    <div class="row2">
+      <button class="btn green" id="btnPay">PAGAR SERVICIO</button>
+      <button class="btn purple" id="btnHelp">AYUDA</button>
+    </div>
+    <div class="note">Fotos y borrado bloqueados por seguridad</div>
+    <div id="editPanel" class="panel" style="display:none">
+      <h3>Editar mi anuncio</h3>
+      <label>Texto del anuncio <span id="lockTexto"></span></label>
+      <textarea id="txtTexto" rows="4"></textarea>
+      <button class="btn pink wide" id="btnSaveTexto">GUARDAR TEXTO</button>
+      <label>Dirección / Ciudad (solo lectura)</label>
+      <div id="dirTxt" style="padding:10px;border:1px solid #f9a8d4;border-radius:8px;font-size:15px;margin-top:4px;background:#fdf2f8"></div>
+      <button class="btn purple wide" id="btnPedirDir">📍 PEDIR CAMBIO DE DIRECCIÓN</button>
+      <div style="font-size:12px;color:#831843;margin-top:4px">El cambio de dirección lo hace soporte por ti. Toca el botón y te atendemos en el chat.</div>
+    </div>
+    <div id="helpPanel" class="panel" style="display:none">
+      <h3>Centro de Soporte</h3>
+      <button class="btn sup" data-motivo="consejos">💡 Consejos para vender más</button>
+      <button class="btn sup" data-motivo="estafa">🚨 Cuidado con mensajes falsos</button>
+      <button class="btn sup" data-motivo="nosube">🚫 Mi página no está subiendo</button>
+      <button class="btn sup" data-motivo="bloqueo">🔒 Creo que mi post se bloqueó</button>
+      <button class="btn sup" data-motivo="editar">✏️ Problema editando mi página</button>
+      <button class="btn sup" data-motivo="nuevo">➕ Quiero rentar un anuncio nuevo más</button>
+      <button class="btn sup" data-motivo="direccion">📍 Quiero cambiar mi dirección</button>
+    </div>
+    <div id="msg" class="msg" style="display:none"></div>
+  </div>
+</div></div>
+<script>
+var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+var initData = tg ? (tg.initData || "") : "";
+if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+function $(id) { return document.getElementById(id); }
+function showMsg(t, ok) { var m = $("msg"); m.style.display = "block"; m.textContent = t; m.className = "msg " + (ok ? "ok" : "err"); try { m.scrollIntoView({behavior: "smooth", block: "center"}); } catch (e) {} }
+function api(path, body) {
+  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Telegram-Init-Data": initData}, body: JSON.stringify(body || {})})
+    .then(function (r) { return r.json().then(function (j) { return {status: r.status, j: j}; }); });
+}
+var ST = null;
+function render(st) {
+  ST = st;
+  $("venceBadge").textContent = st.vence_corto ? ("VENCE: " + st.vence_corto) : "VENCE";
+  if (st.foto_url) { var im = $("fotoImg"); im.src = st.foto_url; im.style.display = "block"; $("fotoTxt").style.display = "none"; }
+  var estado = st.estado === "ACTIVO" ? "🟢 ACTIVO" : (st.estado === "PAUSADO" ? "🔴 PAUSADO" : "🔒 VENCIDO");
+  $("estadoTxt").textContent = estado + " · " + (st.ubicacion || "Sin ubicación") + " · Vence: " + st.vence + (st.faltan ? " (Faltan " + st.faltan + ")" : "");
+  $("proxBump").textContent = st.proximo_bump;
+  $("bumpsHoy").textContent = "Bumps hoy: " + st.bumps_hoy + " · Te avisamos en el chat cuando suba";
+  var tb = $("btnToggle");
+  if (st.paused) { tb.textContent = "ENCENDER ANUNCIO"; tb.className = "btn green wide"; }
+  else { tb.textContent = "PAUSAR ANUNCIO"; tb.className = "btn pink wide"; }
+  $("vencido").style.display = st.rental_expired ? "block" : "none";
+  ["btnEdit", "btnBump", "btnToggle", "btnFoto"].forEach(function (id) { $(id).disabled = !!st.rental_expired; });
+  $("txtTexto").value = st.texto || "";
+  $("dirTxt").textContent = st.ubicacion || "Sin ubicación";
+  $("lockTexto").textContent = st.edit_texto_disponible ? "(disponible)" : "(🔒 disponible en " + st.edit_texto_faltan_h + " h)";
+  $("btnSaveTexto").disabled = !st.edit_texto_disponible;
+}
+function loadStatus() {
+  return api("/renta/api/status").then(function (res) {
+    if (res.j && res.j.ok) render(res.j);
+    else showMsg((res.j && res.j.message) || "No se pudo cargar tu anuncio.", false);
+  }).catch(function () { showMsg("Sin conexión. Inténtalo otra vez.", false); });
+}
+function act(path, body) {
+  return api(path, body).then(function (res) {
+    var j = res.j || {};
+    if (j.ok) { if (j.estado) render(j); else loadStatus(); showMsg(j.message || "✅ Listo.", true); }
+    else showMsg(j.message || "Algo salió mal. Inténtalo otra vez.", false);
+  }).catch(function () { showMsg("Sin conexión. Inténtalo otra vez.", false); });
+}
+$("btnToggle").onclick = function () { act(ST && ST.paused ? "/renta/api/resume" : "/renta/api/pause"); };
+$("btnBump").onclick = function () { act("/renta/api/bump"); };
+$("btnFoto").onclick = function () { act("/renta/api/foto"); };
+$("btnPay").onclick = function () { act("/renta/api/pay"); };
+$("btnNew").onclick = function () { showMsg("🔒 Bloqueado por seguridad: esta opción no está disponible. Si necesitas ayuda, toca AYUDA.", false); };
+$("btnRemove").onclick = function () { showMsg("🔒 Bloqueado por seguridad: no puedes borrar tu anuncio desde aquí. Si necesitas ayuda, toca AYUDA.", false); };
+$("btnEdit").onclick = function () { var p = $("editPanel"); p.style.display = p.style.display === "none" ? "block" : "none"; };
+$("btnHelp").onclick = function () { var p = $("helpPanel"); p.style.display = p.style.display === "none" ? "block" : "none"; };
+$("btnSaveTexto").onclick = function () { act("/renta/api/edit_text", {texto: $("txtTexto").value}); };
+$("btnPedirDir").onclick = function () { act("/renta/api/support", {motivo: "direccion"}); };
+Array.prototype.forEach.call(document.querySelectorAll(".sup"), function (b) {
+  b.onclick = function () { act("/renta/api/support", {motivo: b.getAttribute("data-motivo")}); };
+});
+if (!initData) { $("sinbot").style.display = "block"; }
+else { $("app").style.display = "block"; loadStatus(); }
+</script>
+</body></html>
+"""
+
+@app.route("/renta/app")
+def renta_app():
+    return RENTA_APP_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+@app.route("/renta/api/status", methods=["POST"])
+def renta_api_status():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    out = rental_status_payload(p); sess.close(); return jsonify(out)
+
+@app.route("/renta/api/pause", methods=["POST"])
+def renta_api_pause():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    b = _renta_expired_block(p)
+    if b: sess.close(); return b
+    apply_desired(sess, p, paused=True)
+    make_command(sess, p, "pause", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
+    sess.commit(); out = rental_status_payload(p); out["message"] = "⏸️ Anuncio pausado."; sess.close(); return jsonify(out)
+
+@app.route("/renta/api/resume", methods=["POST"])
+def renta_api_resume():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    b = _renta_expired_block(p)
+    if b: sess.close(); return b
+    apply_desired(sess, p, paused=False)
+    make_command(sess, p, "resume", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
+    sess.commit(); out = rental_status_payload(p); out["message"] = "▶️ Anuncio encendido."; sess.close(); return jsonify(out)
+
+@app.route("/renta/api/bump", methods=["POST"])
+def renta_api_bump():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    b = _renta_expired_block(p)
+    if b: sess.close(); return b
+    if p.paused:
+        sess.close(); return jsonify({"ok": False, "error": "pausado", "message": "Tu anuncio está pausado. Toca ENCENDER ANUNCIO primero."}), 409
+    make_command(sess, p, "bump_now", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
+    sess.commit(); out = rental_status_payload(p); out["message"] = "⚡ Bump solicitado. Te avisamos en el chat cuando suba."; sess.close(); return jsonify(out)
+
+@app.route("/renta/api/foto", methods=["POST"])
+def renta_api_foto():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    b = _renta_expired_block(p)
+    if b: sess.close(); return b
+    make_command(sess, p, "photo", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
+    sess.commit(); out = rental_status_payload(p); out["message"] = "📸 Foto solicitada. En 1-2 minutos te llega a este chat."; sess.close(); return jsonify(out)
+
+@app.route("/renta/api/edit_text", methods=["POST"])
+def renta_api_edit_text():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    b = _renta_expired_block(p)
+    if b: sess.close(); return b
+    nuevo = str((request.get_json(silent=True) or {}).get("texto", "")).strip()
+    if not nuevo:
+        sess.close(); return jsonify({"ok": False, "error": "vacio", "message": "Escribe el nuevo texto."}), 400
+    left = 86400 - (time.time() - float(p.last_text_edit_at or 0))
+    if left > 0:
+        sess.close(); return jsonify({"ok": False, "error": "candado_24h", "message": f"🔒 Edición bloqueada por 24 h. Disponible en {int(left//3600)}h {int((left%3600)//60)}m.", "faltan_h": round(left / 3600, 1)}), 429
+    p.texto = nuevo; p.last_text_edit_at = time.time(); sess.commit()
+    out = rental_status_payload(p); out["message"] = "✅ Texto actualizado. Candado de 24 h activado 🔒"; sess.close(); return jsonify(out)
+
+@app.route("/renta/api/change_city", methods=["POST"])
+def renta_api_change_city():
+    # Regla de Luis: la cliente no cambia la dirección; lo hace el admin desde el panel.
+    return jsonify({"ok": False, "error": "bloqueado", "message": "🔒 El cambio de dirección lo hace soporte. Toca AYUDA y te atendemos."}), 403
+
+@app.route("/renta/api/pay", methods=["POST"])
+def renta_api_pay():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    _renta_admin_alert(sess, p, "Quiere pagar / renovar servicio"); sess.commit(); sess.close()
+    return jsonify({"ok": True, "message": "✅ Solicitud enviada. El administrador te atiende en este chat para renovar."})
+
+@app.route("/renta/api/write_new", methods=["POST"])
+def renta_api_write_new():
+    # Regla de Luis: WRITE NEW es solo estética (🔒). No crea, no borra, no alerta.
+    return jsonify({"ok": False, "error": "bloqueado", "message": "🔒 Bloqueado por seguridad: esta opción no está disponible."}), 403
+
+SOP_MOTIVOS_APP = {"consejos": "Consejos para vender más", "nosube": "Mi página no está subiendo",
+                   "bloqueo": "Creo que mi post se bloqueó", "editar": "Problema editando mi página",
+                   "nuevo": "Quiere rentar un anuncio nuevo más", "pagar": "Quiere pagar / renovar servicio",
+                   "direccion": "Quiere cambiar su dirección"}
+ESTAFA_TXT_APP = "🚨 Cuidado con mensajes falsos\nSi te mandan un enlace raro diciendo que es de MegaPersonals o de soporte, es una estafa. No pagues ni des tu clave fuera de este chat. Ante la duda, escríbenos por Ayuda."
+
+@app.route("/renta/api/support", methods=["POST"])
+def renta_api_support():
+    sess = db(); p, err = rental_from_init_data(sess)
+    if err: sess.close(); return err
+    motivo = str((request.get_json(silent=True) or {}).get("motivo", "")).strip()
+    if motivo == "estafa":
+        sess.close(); return jsonify({"ok": True, "message": ESTAFA_TXT_APP})
+    texto_motivo = SOP_MOTIVOS_APP.get(motivo, "Solicitud de soporte")
+    _renta_admin_alert(sess, p, texto_motivo); sess.commit(); sess.close()
+    return jsonify({"ok": True, "message": "✅ Tu solicitud fue enviada al administrador."})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
