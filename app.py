@@ -119,6 +119,17 @@ class PendingInput(Base):
     expires_at = Column(Float, nullable=False)
     payload = Column(Text, default="")
 
+class RentalOffer(Base):
+    __tablename__ = "rental_offers"
+    id = Column(Integer, primary_key=True)
+    days = Column(Integer, nullable=False, default=7)
+    price = Column(Float, nullable=False, default=0)
+    label = Column(String, default="")
+    is_offer = Column(Boolean, default=False)
+    active = Column(Boolean, default=True)
+    sort = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=now_utc)
+
 Base.metadata.create_all(engine)
 # Migracion segura para bases ya creadas (Postgres/SQLite): agrega payload si falta.
 try:
@@ -131,7 +142,7 @@ except Exception:
 app = Flask(__name__)
 
 LOGIN_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11 — Acceso</title>\n<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:#1e293b;padding:24px;border-radius:12px;width:min(92vw,360px)}input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #475569;margin-top:8px;box-sizing:border-box}button{background:#059669;color:#fff;border:0;font-weight:700}.err{color:#fda4af}</style></head>\n<body><form class="card" method="post"><h1>Panel SEBASTIÁN MEGA v11</h1>{% if error %}<p class="err">{{error}}</p>{% endif %}<label>Contraseña del panel<input type="password" name="password" required autofocus></label><button>Entrar</button></form></body></html>\n'
-INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><input name="foto_url" value="{{p.foto_url or \'\'}}" placeholder="URL foto de la modelo"><input name="enlace_anuncio" value="{{p.enlace_anuncio or \'\'}}" placeholder="Enlace del anuncio"><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
+INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n<div class="card"><h2>💰 Ofertas de alquiler</h2><p>Estas son las opciones que la cliente ve al tocar <b>PAGAR SERVICIO</b> en su pantalla. Puedes agregar, <b>editar días y precio</b>, activar/desactivar o borrar cuando quieras; el cambio se ve al instante en su pantalla. El cobro lo coordinas tú: al elegir una, te llega el aviso a Telegram y tú extiendes el vencimiento desde aquí (Editar perfil).</p><form method="post" action="/offers"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="7" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" placeholder="100" required></label><label>Etiqueta (opcional) <input name="label" placeholder="Ej. Popular"></label><label>Orden <input name="sort" type="number" value="0"></label><label><input type="checkbox" name="is_offer" value="1"> 🏷️ Es oferta (sello OFERTA)</label><label><input type="checkbox" name="active" value="1" checked> ✅ Activa (visible)</label></div><button>Agregar oferta</button></form>{% for o in offers %}<div class="card" style="background:#1e293b"><form method="post" action="/offers/{{o.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="{{o.days}}" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" value="{{o.price}}" required></label><label>Etiqueta <input name="label" value="{{o.label or \'\'}}"></label><label>Orden <input name="sort" type="number" value="{{o.sort}}"></label><label><input type="checkbox" name="is_offer" value="1" {% if o.is_offer %}checked{% endif %}> 🏷️ Es oferta</label><label><input type="checkbox" name="active" value="1" {% if o.active %}checked{% endif %}> ✅ Activa</label></div><button>Guardar cambios</button></form><form method="post" action="/offers/{{o.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Desactivar\' if o.active else \'Activar\'}}</button></form> <form method="post" action="/offers/{{o.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Borrar esta oferta?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form></div>{% else %}<p>Sin ofertas todavía. Agrega la primera arriba (ej. 7 días por $100).</p>{% endfor %}</div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><input name="foto_url" value="{{p.foto_url or \'\'}}" placeholder="URL foto de la modelo"><input name="enlace_anuncio" value="{{p.enlace_anuncio or \'\'}}" placeholder="Enlace del anuncio"><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
 
 def render_page(name, **ctx):
     # Siempre usar las pantallas v11 de adentro del archivo.
@@ -654,8 +665,9 @@ def logout(): session.clear(); return redirect(url_for("login"))
 @login_required
 def index():
     sess = db(); profiles = sess.query(Profile).order_by(Profile.id.desc()).all(); groups = sess.query(Group).all()
+    offers = sess.query(RentalOffer).order_by(RentalOffer.sort.asc(), RentalOffer.days.asc(), RentalOffer.id.asc()).all()
     new_key = session.pop("new_api_key", ""); new_codigo = session.pop("new_codigo", ""); sess.close()
-    return render_page("index.html", profiles=profiles, groups=groups, csrf=csrf_token(), new_key=new_key, new_codigo=new_codigo, rd=rd_now().strftime("%I:%M %p"))
+    return render_page("index.html", profiles=profiles, groups=groups, offers=offers, csrf=csrf_token(), new_key=new_key, new_codigo=new_codigo, rd=rd_now().strftime("%I:%M %p"))
 
 @app.route("/profiles", methods=["POST"])
 @app.route("/agregar", methods=["POST"])
@@ -759,6 +771,48 @@ def create_group():
         except Exception: sess.rollback()
     sess.close(); return redirect(url_for("index"))
 
+def _offer_from_form():
+    try: days = int(request.form.get("days") or 0)
+    except Exception: days = 0
+    try: price = float(request.form.get("price") or 0)
+    except Exception: price = 0.0
+    try: sort = int(request.form.get("sort") or 0)
+    except Exception: sort = 0
+    return days, price, request.form.get("label", "").strip(), request.form.get("is_offer") == "1", request.form.get("active") == "1", sort
+
+@app.route("/offers", methods=["POST"])
+@login_required
+def create_offer():
+    check_csrf(); sess = db()
+    days, price, label, is_offer, active, sort = _offer_from_form()
+    if days > 0 and price >= 0:
+        sess.add(RentalOffer(days=days, price=price, label=label, is_offer=is_offer, active=active, sort=sort)); sess.commit()
+    sess.close(); return redirect(url_for("index"))
+
+@app.route("/offers/<int:oid>/edit", methods=["POST"])
+@login_required
+def edit_offer(oid):
+    check_csrf(); sess = db(); o = sess.query(RentalOffer).filter_by(id=oid).first()
+    if o:
+        days, price, label, is_offer, active, sort = _offer_from_form()
+        if days > 0 and price >= 0:
+            o.days = days; o.price = price; o.label = label; o.is_offer = is_offer; o.active = active; o.sort = sort; sess.commit()
+    sess.close(); return redirect(url_for("index"))
+
+@app.route("/offers/<int:oid>/toggle", methods=["POST"])
+@login_required
+def toggle_offer(oid):
+    check_csrf(); sess = db(); o = sess.query(RentalOffer).filter_by(id=oid).first()
+    if o: o.active = not o.active; sess.commit()
+    sess.close(); return redirect(url_for("index"))
+
+@app.route("/offers/<int:oid>/delete", methods=["POST"])
+@login_required
+def delete_offer(oid):
+    check_csrf(); sess = db(); o = sess.query(RentalOffer).filter_by(id=oid).first()
+    if o: sess.delete(o); sess.commit()
+    sess.close(); return redirect(url_for("index"))
+
 @app.route("/internal/tick", methods=["POST"])
 def internal_tick():
     if INTERNAL_SECRET and not hmac.compare_digest(request.headers.get("X-Internal-Secret", ""), INTERNAL_SECRET): abort(403)
@@ -847,6 +901,11 @@ def api_report_bump():
         _lb = p.last_bump_at_utc if p.last_bump_at_utc.tzinfo else p.last_bump_at_utc.replace(tzinfo=timezone.utc)
         if (now_utc() - _lb).total_seconds() < 120:
             sess.close(); return jsonify({"ok": True, "dedup": True})  # reporte repetido: no duplicar
+    # La foto que trae el reporte es la foto actual del anuncio: se guarda en el
+    # perfil para que la tarjeta CURRENT POST de la Mini App la muestre sola.
+    _rep_foto = (request.form.get("foto_url") or "").strip()
+    if _rep_foto.startswith(("http://", "https://")):
+        p.foto_url = _rep_foto
     photo_path = ""
     f = request.files.get("captura") or request.files.get("photo")
     uploaded_path = ""
@@ -937,7 +996,24 @@ def rental_from_init_data(sess):
         return None, (jsonify({"ok": False, "error": "sin_perfil", "message": "No tienes un anuncio de renta activo. Escribe a soporte."}), 403)
     return p, None
 
-def rental_status_payload(p):
+def fmt_price(v):
+    try: v = float(v or 0)
+    except Exception: v = 0.0
+    return f"${int(v)}" if v == int(v) else f"${v:.2f}"
+
+def offers_payload(sess):
+    if sess is None: return []
+    rows = sess.query(RentalOffer).filter_by(active=True).order_by(RentalOffer.sort.asc(), RentalOffer.days.asc(), RentalOffer.id.asc()).all()
+    out = []
+    for o in rows:
+        per = round(float(o.price or 0) / o.days, 1) if o.days else 0
+        out.append({"id": o.id, "days": int(o.days or 0), "price": float(o.price or 0),
+                    "price_fmt": fmt_price(o.price), "label": o.label or "",
+                    "is_offer": bool(o.is_offer), "per_day": per,
+                    "per_day_fmt": (fmt_price(per) + "/día") if per else ""})
+    return out
+
+def rental_status_payload(p, sess=None):
     now = time.time()
     def lock_left(ts): return max(0.0, 86400 - (now - float(ts or 0)))
     exp = p.rental_expires_at
@@ -950,14 +1026,20 @@ def rental_status_payload(p):
         if seg > 0: faltan = f"{seg//86400}d {seg%86400//3600}h"
     prox = p.next_bump_at_utc.astimezone(RD_TZ).strftime("%I:%M %p") if (p.next_bump_at_utc and not p.paused) else "—"
     lt = lock_left(p.last_text_edit_at)
+    def _ms(dt):  # epoch ms UTC para las cuentas regresivas en vivo de la Mini App
+        if not dt: return None
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
     return {"ok": True, "codigo": p.codigo,
             "estado": "VENCIDO" if p.rental_expired else ("PAUSADO" if p.paused else "ACTIVO"),
             "paused": bool(p.paused), "rental_expired": bool(p.rental_expired),
             "ubicacion": p.ubicacion or "", "texto": p.texto or "",
             "vence": vence, "vence_corto": vence_corto, "faltan": faltan,
             "proximo_bump": prox, "bumps_hoy": p.bumps_today or 0,
+            "next_bump_at_ms": _ms(p.next_bump_at_utc), "vence_at_ms": _ms(exp),
             "foto_url": p.foto_url or "",
-            "edit_texto_disponible": lt <= 0, "edit_texto_faltan_h": round(lt / 3600, 1) if lt > 0 else 0}
+            "edit_texto_disponible": lt <= 0, "edit_texto_faltan_h": round(lt / 3600, 1) if lt > 0 else 0,
+            "offers": offers_payload(sess)}
 
 def _renta_expired_block(p):
     if p.rental_expired:
@@ -967,6 +1049,10 @@ def _renta_expired_block(p):
 def _renta_admin_alert(sess, p, motivo):
     if ADMIN_CHAT_ID:
         enqueue_telegram(sess, ADMIN_CHAT_ID, f"🚨 <b>ALERTA DE RENTA</b>\nMotivo: {esc(motivo)}\nCliente: {esc(p.client_name or p.client_chat_id)}\nPerfil: <b>{esc(p.codigo)}</b>")
+
+def _renta_pay_alert(sess, p, offer):
+    if ADMIN_CHAT_ID:
+        enqueue_telegram(sess, ADMIN_CHAT_ID, f"💚 Cliente {esc(p.client_name or p.client_chat_id)} ({esc(p.codigo)}) quiere renovar: {int(offer.days or 0)} días por {fmt_price(offer.price)}")
 
 RENTA_APP_HTML = """<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
@@ -999,6 +1085,10 @@ RENTA_APP_HTML = """<!doctype html>
 .panel label{display:block;font-size:13px;font-weight:700;color:#831843;margin-top:10px}
 .panel textarea,.panel input{width:100%;padding:10px;border:1px solid #f9a8d4;border-radius:8px;font-size:15px;margin-top:4px}
 .sup{background:#fdf2f8;color:#9d174d;border:1px solid #f9a8d4;padding:12px 8px;font-size:14px;margin-top:8px;text-align:left}
+.offer{background:#fff;color:#9d174d;border:2px solid #ec4899;margin-top:10px;text-align:center;position:relative;padding:18px 8px 14px}
+.offer-t{display:block;font-size:21px;font-weight:900}
+.offer-s{display:block;font-size:13px;font-weight:700;color:#831843;margin-top:3px}
+.offer-badge{position:absolute;top:-10px;right:10px;background:#f59e0b;color:#fff;font-size:11px;font-weight:900;padding:3px 10px;border-radius:999px}
 .msg{border-radius:10px;padding:12px;margin-top:12px;font-size:15px;text-align:center;font-weight:700}
 .msg.ok{background:#dcfce7;color:#166534}.msg.err{background:#fee2e2;color:#991b1b}
 .vencido{background:#fee2e2;color:#991b1b;border-radius:10px;padding:12px;text-align:center;font-weight:700;margin-bottom:10px}
@@ -1014,6 +1104,7 @@ RENTA_APP_HTML = """<!doctype html>
     <div class="row"><span class="cur">CURRENT POST</span><span class="badge" id="venceBadge">VENCE</span></div>
     <div class="foto" id="fotoBox"><span id="fotoTxt">Foto de tu anuncio</span><img id="fotoImg" style="display:none" alt=""></div>
     <div class="estado" id="estadoTxt"></div>
+    <div class="estado" id="venceTxt"></div>
     <div class="bumpbox"><div class="b1">PRÓXIMO BUMP</div><div class="b2" id="proxBump">—</div><div class="b3" id="bumpsHoy"></div></div>
     <div class="grid">
       <button class="btn red" id="btnEdit">EDIT POST</button>
@@ -1048,6 +1139,12 @@ RENTA_APP_HTML = """<!doctype html>
       <button class="btn sup" data-motivo="nuevo">➕ Quiero rentar un anuncio nuevo más</button>
       <button class="btn sup" data-motivo="direccion">📍 Quiero cambiar mi dirección</button>
     </div>
+    <div id="payPanel" class="panel" style="display:none">
+      <h3>RENOVAR / PAGAR</h3>
+      <div style="font-size:13px;color:#831843">Elige una opción y te contactamos en este chat para el pago.</div>
+      <div id="offersList"></div>
+      <button class="btn sup" id="btnPaySupport">💬 Hablar con soporte</button>
+    </div>
     <div id="msg" class="msg" style="display:none"></div>
   </div>
 </div></div>
@@ -1062,14 +1159,45 @@ function api(path, body) {
     .then(function (r) { return r.json().then(function (j) { return {status: r.status, j: j}; }); });
 }
 var ST = null;
+var bumpTarget = 0, venceTarget = 0, lastZeroRefresh = 0;
+function fmtCuenta(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000));
+  var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  var mm = (m < 10 ? "0" : "") + m, sss = (ss < 10 ? "0" : "") + ss;
+  return h > 0 ? (h + ":" + mm + ":" + sss) : (mm + ":" + sss);
+}
+function tickClocks() {
+  if (!ST) return;
+  var now = Date.now();
+  if (ST.rental_expired) { $("proxBump").textContent = "—"; }
+  else if (ST.paused) { $("proxBump").textContent = "PAUSADO"; }
+  else if (bumpTarget) {
+    var left = bumpTarget - now;
+    if (left <= 0) {
+      $("proxBump").textContent = "00:00";
+      if (now - lastZeroRefresh > 15000) { lastZeroRefresh = now; loadStatus(true); }
+    } else { $("proxBump").textContent = fmtCuenta(left); }
+  } else { $("proxBump").textContent = "—"; }
+  if (venceTarget) {
+    var vl = venceTarget - now;
+    if (vl <= 0) { $("venceTxt").textContent = "🔒 VENCIDO"; }
+    else {
+      var s = Math.floor(vl / 1000);
+      $("venceTxt").textContent = "⏳ Tu renta vence en: " + Math.floor(s / 86400) + "d " + Math.floor(s % 86400 / 3600) + "h " + Math.floor(s % 3600 / 60) + "m " + (s % 60) + "s";
+    }
+  } else { $("venceTxt").textContent = ""; }
+}
+setInterval(tickClocks, 1000);
+setInterval(function () { loadStatus(true); }, 30000);
+document.addEventListener("visibilitychange", function () { if (!document.hidden) loadStatus(true); });
 function render(st) {
   ST = st;
   $("venceBadge").textContent = st.vence_corto ? ("VENCE: " + st.vence_corto) : "VENCE";
   if (st.foto_url) { var im = $("fotoImg"); im.src = st.foto_url; im.style.display = "block"; $("fotoTxt").style.display = "none"; }
   var estado = st.estado === "ACTIVO" ? "🟢 ACTIVO" : (st.estado === "PAUSADO" ? "🔴 PAUSADO" : "🔒 VENCIDO");
-  $("estadoTxt").textContent = estado + " · " + (st.ubicacion || "Sin ubicación") + " · Vence: " + st.vence + (st.faltan ? " (Faltan " + st.faltan + ")" : "");
-  $("proxBump").textContent = st.proximo_bump;
-  $("bumpsHoy").textContent = "Bumps hoy: " + st.bumps_hoy + " · Te avisamos en el chat cuando suba";
+  $("estadoTxt").textContent = estado + " · " + (st.ubicacion || "Sin ubicación") + " · Vence: " + st.vence;
+  bumpTarget = st.next_bump_at_ms || 0; venceTarget = st.vence_at_ms || 0; tickClocks();
+  $("bumpsHoy").textContent = "Bumps hoy: " + st.bumps_hoy + (st.proximo_bump && st.proximo_bump !== "—" ? " · Próximo: " + st.proximo_bump + " (RD)" : "") + " · Te avisamos en el chat cuando suba";
   var tb = $("btnToggle");
   if (st.paused) { tb.textContent = "ENCENDER ANUNCIO"; tb.className = "btn green wide"; }
   else { tb.textContent = "PAUSAR ANUNCIO"; tb.className = "btn pink wide"; }
@@ -1079,12 +1207,23 @@ function render(st) {
   $("dirTxt").textContent = st.ubicacion || "Sin ubicación";
   $("lockTexto").textContent = st.edit_texto_disponible ? "(disponible)" : "(🔒 disponible en " + st.edit_texto_faltan_h + " h)";
   $("btnSaveTexto").disabled = !st.edit_texto_disponible;
+  var ol = $("offersList"); ol.innerHTML = "";
+  (st.offers || []).forEach(function (o) {
+    var b = document.createElement("button"); b.className = "btn offer";
+    var t = document.createElement("span"); t.className = "offer-t";
+    t.textContent = o.days + " DÍAS — " + o.price_fmt; b.appendChild(t);
+    if (o.is_offer) { var bd = document.createElement("span"); bd.className = "offer-badge"; bd.textContent = "OFERTA"; b.appendChild(bd); }
+    var sub = []; if (o.label) sub.push(o.label); if (o.per_day_fmt) sub.push(o.per_day_fmt);
+    if (sub.length) { var d = document.createElement("span"); d.className = "offer-s"; d.textContent = sub.join(" · "); b.appendChild(d); }
+    b.onclick = function () { act("/renta/api/pay", {offer_id: o.id}); };
+    ol.appendChild(b);
+  });
 }
-function loadStatus() {
+function loadStatus(silent) {
   return api("/renta/api/status").then(function (res) {
     if (res.j && res.j.ok) render(res.j);
-    else showMsg((res.j && res.j.message) || "No se pudo cargar tu anuncio.", false);
-  }).catch(function () { showMsg("Sin conexión. Inténtalo otra vez.", false); });
+    else if (!silent) showMsg((res.j && res.j.message) || "No se pudo cargar tu anuncio.", false);
+  }).catch(function () { if (!silent) showMsg("Sin conexión. Inténtalo otra vez.", false); });
 }
 function act(path, body) {
   return api(path, body).then(function (res) {
@@ -1096,7 +1235,11 @@ function act(path, body) {
 $("btnToggle").onclick = function () { act(ST && ST.paused ? "/renta/api/resume" : "/renta/api/pause"); };
 $("btnBump").onclick = function () { act("/renta/api/bump"); };
 $("btnFoto").onclick = function () { act("/renta/api/foto"); };
-$("btnPay").onclick = function () { act("/renta/api/pay"); };
+$("btnPay").onclick = function () {
+  if (ST && ST.offers && ST.offers.length) { var p = $("payPanel"); p.style.display = p.style.display === "none" ? "block" : "none"; try { p.scrollIntoView({behavior: "smooth", block: "center"}); } catch (e) {} }
+  else act("/renta/api/pay");
+};
+$("btnPaySupport").onclick = function () { act("/renta/api/support", {motivo: "pagar"}); };
 $("btnNew").onclick = function () { showMsg("🔒 Bloqueado por seguridad: esta opción no está disponible. Si necesitas ayuda, toca AYUDA.", false); };
 $("btnRemove").onclick = function () { showMsg("🔒 Bloqueado por seguridad: no puedes borrar tu anuncio desde aquí. Si necesitas ayuda, toca AYUDA.", false); };
 $("btnEdit").onclick = function () { var p = $("editPanel"); p.style.display = p.style.display === "none" ? "block" : "none"; };
@@ -1120,7 +1263,7 @@ def renta_app():
 def renta_api_status():
     sess = db(); p, err = rental_from_init_data(sess)
     if err: sess.close(); return err
-    out = rental_status_payload(p); sess.close(); return jsonify(out)
+    out = rental_status_payload(p, sess); sess.close(); return jsonify(out)
 
 @app.route("/renta/api/pause", methods=["POST"])
 def renta_api_pause():
@@ -1130,7 +1273,7 @@ def renta_api_pause():
     if b: sess.close(); return b
     apply_desired(sess, p, paused=True)
     make_command(sess, p, "pause", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
-    sess.commit(); out = rental_status_payload(p); out["message"] = "⏸️ Anuncio pausado."; sess.close(); return jsonify(out)
+    sess.commit(); out = rental_status_payload(p, sess); out["message"] = "⏸️ Anuncio pausado."; sess.close(); return jsonify(out)
 
 @app.route("/renta/api/resume", methods=["POST"])
 def renta_api_resume():
@@ -1140,7 +1283,7 @@ def renta_api_resume():
     if b: sess.close(); return b
     apply_desired(sess, p, paused=False)
     make_command(sess, p, "resume", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
-    sess.commit(); out = rental_status_payload(p); out["message"] = "▶️ Anuncio encendido."; sess.close(); return jsonify(out)
+    sess.commit(); out = rental_status_payload(p, sess); out["message"] = "▶️ Anuncio encendido."; sess.close(); return jsonify(out)
 
 @app.route("/renta/api/bump", methods=["POST"])
 def renta_api_bump():
@@ -1151,7 +1294,7 @@ def renta_api_bump():
     if p.paused:
         sess.close(); return jsonify({"ok": False, "error": "pausado", "message": "Tu anuncio está pausado. Toca ENCENDER ANUNCIO primero."}), 409
     make_command(sess, p, "bump_now", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
-    sess.commit(); out = rental_status_payload(p); out["message"] = "⚡ Bump solicitado. Te avisamos en el chat cuando suba."; sess.close(); return jsonify(out)
+    sess.commit(); out = rental_status_payload(p, sess); out["message"] = "⚡ Bump solicitado. Te avisamos en el chat cuando suba."; sess.close(); return jsonify(out)
 
 @app.route("/renta/api/foto", methods=["POST"])
 def renta_api_foto():
@@ -1160,7 +1303,7 @@ def renta_api_foto():
     b = _renta_expired_block(p)
     if b: sess.close(); return b
     make_command(sess, p, "photo", {"reason": "rental_app"}, f"rentaapp:{int(time.time()*1000)}")
-    sess.commit(); out = rental_status_payload(p); out["message"] = "📸 Foto solicitada. En 1-2 minutos te llega a este chat."; sess.close(); return jsonify(out)
+    sess.commit(); out = rental_status_payload(p, sess); out["message"] = "📸 Foto solicitada. En 1-2 minutos te llega a este chat."; sess.close(); return jsonify(out)
 
 @app.route("/renta/api/edit_text", methods=["POST"])
 def renta_api_edit_text():
@@ -1175,7 +1318,7 @@ def renta_api_edit_text():
     if left > 0:
         sess.close(); return jsonify({"ok": False, "error": "candado_24h", "message": f"🔒 Edición bloqueada por 24 h. Disponible en {int(left//3600)}h {int((left%3600)//60)}m.", "faltan_h": round(left / 3600, 1)}), 429
     p.texto = nuevo; p.last_text_edit_at = time.time(); sess.commit()
-    out = rental_status_payload(p); out["message"] = "✅ Texto actualizado. Candado de 24 h activado 🔒"; sess.close(); return jsonify(out)
+    out = rental_status_payload(p, sess); out["message"] = "✅ Texto actualizado. Candado de 24 h activado 🔒"; sess.close(); return jsonify(out)
 
 @app.route("/renta/api/change_city", methods=["POST"])
 def renta_api_change_city():
@@ -1186,6 +1329,16 @@ def renta_api_change_city():
 def renta_api_pay():
     sess = db(); p, err = rental_from_init_data(sess)
     if err: sess.close(); return err
+    body = request.get_json(silent=True) or {}
+    offer_id = body.get("offer_id")
+    if offer_id is not None:
+        try: offer_id = int(offer_id)
+        except Exception: offer_id = -1
+        offer = sess.query(RentalOffer).filter_by(id=offer_id, active=True).first()
+        if not offer:
+            sess.close(); return jsonify({"ok": False, "error": "oferta_invalida", "message": "Esa oferta ya no está disponible. Elige otra o toca Hablar con soporte."}), 400
+        _renta_pay_alert(sess, p, offer); sess.commit(); sess.close()
+        return jsonify({"ok": True, "message": "✅ Recibido. Te contactamos en este chat para el pago."})
     _renta_admin_alert(sess, p, "Quiere pagar / renovar servicio"); sess.commit(); sess.close()
     return jsonify({"ok": True, "message": "✅ Solicitud enviada. El administrador te atiende en este chat para renovar."})
 
