@@ -1,11 +1,11 @@
 # SEBASTIÁN MEGA v11 — Backend único
 # Un solo dueño del bot de Telegram (webhook), cola por perfil, estado deseado persistente.
 # La extensión NO contiene el token: se autentica con una api_key por perfil.
-import os, json, time, hmac, hashlib, secrets, threading, html
+import os, json, time, hmac, hashlib, secrets, threading, html, shutil
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import requests
-from flask import Flask, request, jsonify, session, redirect, url_for, render_template, render_template_string, abort
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template, render_template_string, abort, send_file
 from jinja2 import TemplateNotFound
 from flask_cors import CORS
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, Float, DateTime, Text, ForeignKey, UniqueConstraint
@@ -59,6 +59,8 @@ class Profile(Base):
     modelo = Column(String, default=""); telefono = Column(String, default="")
     ubicacion = Column(String, default=""); texto = Column(Text, default="")
     foto_url = Column(String, default=""); enlace_anuncio = Column(String, default="")
+    last_photo_path = Column(String, default="")  # copia local de la última foto resuelta (tarjeta Mini App)
+    client_token = Column(String, default="")  # llave secreta del enlace directo de la cliente (sin Telegram)
     paused = Column(Boolean, default=False); schedule_paused = Column(Boolean, default=False)
     interval_min = Column(Integer, default=16)
     pause_at_rd = Column(String, default=""); resume_at_rd = Column(String, default="")
@@ -138,11 +140,23 @@ try:
         _conn.execute(_sql_text("ALTER TABLE pending_inputs ADD COLUMN payload TEXT DEFAULT ''"))
 except Exception:
     pass
+try:
+    from sqlalchemy import text as _sql_text2
+    with engine.begin() as _conn2:
+        _conn2.execute(_sql_text2("ALTER TABLE profiles ADD COLUMN last_photo_path TEXT DEFAULT ''"))
+except Exception:
+    pass
+try:
+    from sqlalchemy import text as _sql_text3
+    with engine.begin() as _conn3:
+        _conn3.execute(_sql_text3("ALTER TABLE profiles ADD COLUMN client_token TEXT DEFAULT ''"))
+except Exception:
+    pass
 
 app = Flask(__name__)
 
 LOGIN_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11 — Acceso</title>\n<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;min-height:100vh;margin:0}.card{background:#1e293b;padding:24px;border-radius:12px;width:min(92vw,360px)}input,button{width:100%;padding:10px;border-radius:8px;border:1px solid #475569;margin-top:8px;box-sizing:border-box}button{background:#059669;color:#fff;border:0;font-weight:700}.err{color:#fda4af}</style></head>\n<body><form class="card" method="post"><h1>Panel SEBASTIÁN MEGA v11</h1>{% if error %}<p class="err">{{error}}</p>{% endif %}<label>Contraseña del panel<input type="password" name="password" required autofocus></label><button>Entrar</button></form></body></html>\n'
-INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n<div class="card"><h2>💰 Ofertas de alquiler</h2><p>Estas son las opciones que la cliente ve al tocar <b>PAGAR SERVICIO</b> en su pantalla. Puedes agregar, <b>editar días y precio</b>, activar/desactivar o borrar cuando quieras; el cambio se ve al instante en su pantalla. El cobro lo coordinas tú: al elegir una, te llega el aviso a Telegram y tú extiendes el vencimiento desde aquí (Editar perfil).</p><form method="post" action="/offers"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="7" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" placeholder="100" required></label><label>Etiqueta (opcional) <input name="label" placeholder="Ej. Popular"></label><label>Orden <input name="sort" type="number" value="0"></label><label><input type="checkbox" name="is_offer" value="1"> 🏷️ Es oferta (sello OFERTA)</label><label><input type="checkbox" name="active" value="1" checked> ✅ Activa (visible)</label></div><button>Agregar oferta</button></form>{% for o in offers %}<div class="card" style="background:#1e293b"><form method="post" action="/offers/{{o.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="{{o.days}}" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" value="{{o.price}}" required></label><label>Etiqueta <input name="label" value="{{o.label or \'\'}}"></label><label>Orden <input name="sort" type="number" value="{{o.sort}}"></label><label><input type="checkbox" name="is_offer" value="1" {% if o.is_offer %}checked{% endif %}> 🏷️ Es oferta</label><label><input type="checkbox" name="active" value="1" {% if o.active %}checked{% endif %}> ✅ Activa</label></div><button>Guardar cambios</button></form><form method="post" action="/offers/{{o.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Desactivar\' if o.active else \'Activar\'}}</button></form> <form method="post" action="/offers/{{o.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Borrar esta oferta?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form></div>{% else %}<p>Sin ofertas todavía. Agrega la primera arriba (ej. 7 días por $100).</p>{% endfor %}</div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><input name="foto_url" value="{{p.foto_url or \'\'}}" placeholder="URL foto de la modelo"><input name="enlace_anuncio" value="{{p.enlace_anuncio or \'\'}}" placeholder="Enlace del anuncio"><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
+INDEX_HTML = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Panel v11</title>\n<style>body{font-family:system-ui;background:#020617;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:16px}.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;margin:12px 0}input,select,textarea,button{padding:8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0}button{background:#059669;color:#fff;border:0;font-weight:700;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}.warn{background:#451a03;border:1px solid #f59e0b;padding:12px;border-radius:10px;word-break:break-all}code{background:#1e293b;padding:2px 6px;border-radius:6px}</style></head>\n<body><div class="wrap"><h1>Panel SEBASTIÁN MEGA v11</h1><p>Hora RD: {{rd}} · Backend único · Cola por perfil</p>\n<form method="post" action="/logout"><button>Salir</button></form>\n{% if new_key %}<div class="warn"><b>Clave API nueva para {{new_codigo}} (cópiala ahora, no se vuelve a mostrar):</b><br><code>{{new_key}}</code><br>Pégala en el popup de la extensión v11 de ese perfil Dolphin.</div>{% endif %}\n<div class="card"><h2>+ Registrar perfil</h2><form method="post" action="/profiles"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="dolphin_id" placeholder="ID Dolphin" required><input name="codigo" placeholder="Código (ej. Perfil-3)" required>\n<input name="modelo" placeholder="Modelo"><input name="telefono" placeholder="Teléfono"><input name="ubicacion" placeholder="Ubicación">\n<input name="foto_url" placeholder="URL foto"><input name="enlace_anuncio" placeholder="Enlace anuncio">\n<input name="interval_min" type="number" value="16" min="1"><label>Pausa RD <input name="pause_at_rd" type="time"></label><label>Reanuda RD <input name="resume_at_rd" type="time"></label>\n<select name="is_rental"><option value="0">Propio</option><option value="1">Renta</option></select>\n<input name="client_name" placeholder="Cliente (renta)"><input name="client_chat_id" placeholder="Chat ID cliente"><label>Vence renta <input name="rental_expires_at" type="datetime-local"></label>\n<textarea name="texto" placeholder="Texto del anuncio"></textarea></div><button>Guardar y generar clave</button></form></div>\n<div class="card"><h2>⏰ Horario para varios perfiles (RD)</h2><form method="post" action="/schedules/apply"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label><input type="checkbox" name="all_profiles" value="1"> 🌐 Todos los perfiles</label>{% for p in profiles %}<label><input type="checkbox" name="profile_ids" value="{{p.id}}"> {{p.codigo}}</label>{% endfor %}<label>Apagado RD <input name="pause_at_rd" type="time"></label><label>Encendido RD <input name="resume_at_rd" type="time"></label><label><input type="checkbox" name="clear_schedule" value="1"> ❌ Quitar horario a los marcados</label></div><button>Aplicar horario a marcados</button></form></div><div class="card"><h2>Grupos</h2><form method="post" action="/groups"><input type="hidden" name="csrf" value="{{csrf}}"><input name="nombre" placeholder="Nombre del grupo" required><button>Crear grupo</button></form>\n<p>{% for g in groups %}<code>{{g.nombre}}</code> {% endfor %}</p></div>\n<div class="card"><h2>💰 Ofertas de alquiler</h2><p>Estas son las opciones que la cliente ve al tocar <b>PAGAR SERVICIO</b> en su pantalla. Puedes agregar, <b>editar días y precio</b>, activar/desactivar o borrar cuando quieras; el cambio se ve al instante en su pantalla. El cobro lo coordinas tú: al elegir una, te llega el aviso a Telegram y tú extiendes el vencimiento desde aquí (Editar perfil).</p><form method="post" action="/offers"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="7" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" placeholder="100" required></label><label>Etiqueta (opcional) <input name="label" placeholder="Ej. Popular"></label><label>Orden <input name="sort" type="number" value="0"></label><label><input type="checkbox" name="is_offer" value="1"> 🏷️ Es oferta (sello OFERTA)</label><label><input type="checkbox" name="active" value="1" checked> ✅ Activa (visible)</label></div><button>Agregar oferta</button></form>{% for o in offers %}<div class="card" style="background:#1e293b"><form method="post" action="/offers/{{o.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid"><label>Días <input name="days" type="number" min="1" value="{{o.days}}" required></label><label>Precio $ <input name="price" type="number" min="0" step="0.01" value="{{o.price}}" required></label><label>Etiqueta <input name="label" value="{{o.label or \'\'}}"></label><label>Orden <input name="sort" type="number" value="{{o.sort}}"></label><label><input type="checkbox" name="is_offer" value="1" {% if o.is_offer %}checked{% endif %}> 🏷️ Es oferta</label><label><input type="checkbox" name="active" value="1" {% if o.active %}checked{% endif %}> ✅ Activa</label></div><button>Guardar cambios</button></form><form method="post" action="/offers/{{o.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Desactivar\' if o.active else \'Activar\'}}</button></form> <form method="post" action="/offers/{{o.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Borrar esta oferta?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form></div>{% else %}<p>Sin ofertas todavía. Agrega la primera arriba (ej. 7 días por $100).</p>{% endfor %}</div>\n{% for p in profiles %}<div class="card"><h3>{{p.codigo}} <small>({{p.modelo or \'Sin nombre\'}})</small> — {{\'🔴 PAUSADA\' if p.paused else \'🟢 ACTIVA\'}}{% if p.is_rental %} · RENTA{% if p.rental_expired %} VENCIDA{% endif %}{% endif %}</h3>\n<p>Dolphin: <code>{{p.dolphin_id}}</code> · Tel: {{p.telefono or \'N/A\'}} · Ubicación: {{p.ubicacion or \'N/A\'}}<br>\nIntervalo: {{p.interval_min}} min · Pausa RD: {{p.pause_at_rd or \'—\'}} · Reanuda RD: {{p.resume_at_rd or \'—\'}}<br>\nÚltimo bump: {{p.last_bump_at_utc or \'Sin actividad\'}} · Bumps hoy: {{p.bumps_today}} · Total: {{p.bumps_total}} · Última señal: {{p.last_seen_at or \'nunca\'}}</p>\n<form method="post" action="/profiles/{{p.id}}/toggle" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{\'Reanudar\' if p.paused else \'Pausar\'}}</button></form>\n<form method="post" action="/profiles/{{p.id}}/photo" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>📸 Foto</button></form><form method="post" action="/profiles/{{p.id}}/regen-key" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Regenerar clave API</button></form>{% if p.is_rental %}<div style="margin-top:8px">🔗 <b>Enlace de la cliente:</b> {% if p.client_token %}<input readonly value="{{base_url}}/cliente/{{p.client_token}}" onclick="this.select()" style="width:min(560px,90%)"> <form method="post" action="/profiles/{{p.id}}/client-link" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><input type="hidden" name="regen" value="1"><button>Generar enlace nuevo</button></form><br><small>Cópialo y envíaselo a la cliente (ej. por WhatsApp). Al generar uno nuevo, el enlace viejo deja de servir.</small>{% else %}<form method="post" action="/profiles/{{p.id}}/client-link" style="display:inline"><input type="hidden" name="csrf" value="{{csrf}}"><button>Generar enlace</button></form>{% endif %}</div>{% endif %}\n<form method="post" action="/profiles/{{p.id}}/delete" style="display:inline" onsubmit="return confirm(\'¿Eliminar este perfil?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button style="background:#be123c">Borrar</button></form>\n<details><summary>Editar</summary><form method="post" action="/profiles/{{p.id}}/edit"><input type="hidden" name="csrf" value="{{csrf}}"><div class="grid">\n<input name="modelo" value="{{p.modelo or \'\'}}" placeholder="Modelo"><input name="telefono" value="{{p.telefono or \'\'}}" placeholder="Teléfono">\n<input name="ubicacion" value="{{p.ubicacion or \'\'}}" placeholder="Ubicación"><input name="interval_min" type="number" value="{{p.interval_min}}">\n<label>Pausa RD <input name="pause_at_rd" type="time" value="{{p.pause_at_rd or \'\'}}"></label><label>Reanuda RD <input name="resume_at_rd" type="time" value="{{p.resume_at_rd or \'\'}}"></label>\n<select name="is_rental"><option value="0" {% if not p.is_rental %}selected{% endif %}>Propio</option><option value="1" {% if p.is_rental %}selected{% endif %}>Renta</option></select>\n<input name="client_name" value="{{p.client_name or \'\'}}" placeholder="Cliente"><input name="client_chat_id" value="{{p.client_chat_id or \'\'}}" placeholder="Chat ID cliente">\n<label>Vence <input name="rental_expires_at" type="datetime-local"></label><input name="foto_url" value="{{p.foto_url or \'\'}}" placeholder="URL foto de la modelo"><input name="enlace_anuncio" value="{{p.enlace_anuncio or \'\'}}" placeholder="Enlace del anuncio"><textarea name="texto">{{p.texto or \'\'}}</textarea></div><button>Guardar cambios</button></form></details></div>\n{% else %}<p>Sin perfiles todavía.</p>{% endfor %}\n</div></body></html>\n'
 
 def render_page(name, **ctx):
     # Siempre usar las pantallas v11 de adentro del archivo.
@@ -667,7 +681,7 @@ def index():
     sess = db(); profiles = sess.query(Profile).order_by(Profile.id.desc()).all(); groups = sess.query(Group).all()
     offers = sess.query(RentalOffer).order_by(RentalOffer.sort.asc(), RentalOffer.days.asc(), RentalOffer.id.asc()).all()
     new_key = session.pop("new_api_key", ""); new_codigo = session.pop("new_codigo", ""); sess.close()
-    return render_page("index.html", profiles=profiles, groups=groups, offers=offers, csrf=csrf_token(), new_key=new_key, new_codigo=new_codigo, rd=rd_now().strftime("%I:%M %p"))
+    return render_page("index.html", profiles=profiles, groups=groups, offers=offers, csrf=csrf_token(), new_key=new_key, new_codigo=new_codigo, rd=rd_now().strftime("%I:%M %p"), base_url=public_base_url())
 
 @app.route("/profiles", methods=["POST"])
 @app.route("/agregar", methods=["POST"])
@@ -760,6 +774,17 @@ def regen_key(pid):
     if p:
         api_key = secrets.token_urlsafe(32); p.api_key_hash = hash_key(api_key); sess.commit()
         session["new_api_key"] = api_key; session["new_codigo"] = p.codigo
+    sess.close(); return redirect(url_for("index"))
+
+@app.route("/profiles/<int:pid>/client-link", methods=["POST"])
+@login_required
+def client_link(pid):
+    # Enlace directo de la cliente (sin Telegram): genera la llave secreta si falta
+    # o la regenera con regen=1 (el enlace viejo deja de servir). Solo perfiles de renta.
+    check_csrf(); sess = db(); p = sess.query(Profile).filter_by(id=pid).first()
+    if p and p.is_rental:
+        if not (p.client_token or "").strip() or request.form.get("regen") == "1":
+            p.client_token = secrets.token_urlsafe(24); sess.commit()
     sess.close(); return redirect(url_for("index"))
 
 @app.route("/groups", methods=["POST"])
@@ -879,18 +904,42 @@ def _download_photo(url):
 
 def _photo_from_ad_page(page_url):
     # Busca la foto principal del anuncio (og:image) en la página pública del anuncio.
+    # Devuelve (ruta_local_descargada, url_og_image); cualquiera puede venir vacía.
     try:
         r = requests.get(page_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        if not r.ok: return ""
+        if not r.ok: return "", ""
         html = r.text[:2 * 1024 * 1024]
         import re as _re
         m = _re.search(r'property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html) or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html)
         if m:
             from urllib.parse import urljoin
-            return _download_photo(urljoin(page_url, m.group(1)))
+            og_url = urljoin(page_url, m.group(1))
+            return _download_photo(og_url), og_url
     except Exception:
         pass
-    return ""
+    return "", ""
+
+def _save_last_photo(p, src_path):
+    """Guarda una COPIA de la última foto resuelta del anuncio (last_<id>.<ext> en
+    UPLOAD_DIR) para la tarjeta CURRENT POST de la Mini App. Es copia y no el archivo
+    original porque el worker de Telegram borra el photo_path tras enviarlo.
+    Nunca debe romper el reporte: cualquier fallo se ignora."""
+    try:
+        if not src_path or not os.path.exists(src_path) or os.path.getsize(src_path) <= 0:
+            return
+        ext = os.path.splitext(src_path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"): ext = ".jpg"
+        dest = os.path.join(UPLOAD_DIR, f"last_{p.id}{ext}")
+        if os.path.abspath(src_path) != os.path.abspath(dest):
+            shutil.copyfile(src_path, dest)
+        # Si cambió la extensión, borra la copia anterior para no dejar huérfanos.
+        old = (p.last_photo_path or "").strip()
+        if old and old != dest and os.path.exists(old):
+            try: os.remove(old)
+            except Exception: pass
+        p.last_photo_path = dest
+    except Exception:
+        pass
 
 @app.route("/api/v1/report-bump", methods=["POST"])
 def api_report_bump():
@@ -918,9 +967,18 @@ def api_report_bump():
             photo_path = _download_photo(_cand)
             if photo_path: break
     if not photo_path and (p.enlace_anuncio or "").strip().startswith(("http://", "https://")):
-        photo_path = _photo_from_ad_page(p.enlace_anuncio.strip())
+        photo_path, _og_url = _photo_from_ad_page(p.enlace_anuncio.strip())
+        # Si la foto vino de og:image y el perfil no tenía foto_url, se guarda la URL
+        # (respaldo de la tarjeta si algún día falta la copia local).
+        if _og_url and not (p.foto_url or "").strip():
+            p.foto_url = _og_url
     if not photo_path:
         photo_path = uploaded_path
+    # Copia local de la última foto resuelta (de cualquier fuente) para la tarjeta
+    # CURRENT POST: la Mini App la sirve desde este servidor, sin depender de que
+    # la URL externa cargue en el teléfono de la cliente.
+    if photo_path:
+        _save_last_photo(p, photo_path)
     if kind == "bump":
         today = rd_date()
         if p.bumps_date != today: p.bumps_date = today; p.bumps_today = 0
@@ -980,11 +1038,15 @@ def validate_init_data(init_data):
     except Exception:
         return None
 
-def rental_from_init_data(sess):
+def rental_from_init_data(sess, allow_query=False):
     """Autentica al cliente por initData y devuelve (perfil, None) o (None, respuesta_error).
     Aislamiento: el perfil se busca SOLO por el user.id firmado por Telegram; nunca se
-    acepta un profile_id enviado por el cliente."""
+    acepta un profile_id enviado por el cliente.
+    allow_query=True (solo el endpoint de foto): también acepta init_data por query
+    string, porque una etiqueta <img> no puede mandar headers."""
     init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data and allow_query:
+        init_data = request.args.get("init_data", "") or ""
     if not init_data:
         body = request.get_json(silent=True) or {}
         init_data = body.get("init_data", "") or ""
@@ -995,6 +1057,30 @@ def rental_from_init_data(sess):
     if not p:
         return None, (jsonify({"ok": False, "error": "sin_perfil", "message": "No tienes un anuncio de renta activo. Escribe a soporte."}), 403)
     return p, None
+
+def rental_from_token(sess, allow_query=False):
+    """Autentica a la cliente por su enlace secreto (llave por perfil de renta).
+    Devuelve (perfil, None) si el token es válido, (None, respuesta_error) si vino
+    un token inválido, o (None, None) si no vino ningún token (se intenta initData).
+    allow_query=True (solo el endpoint de foto): también acepta client_token por
+    query string, porque una etiqueta <img> no puede mandar headers."""
+    token = request.headers.get("X-Client-Token", "") or ""
+    if not token and allow_query:
+        token = request.args.get("client_token", "") or ""
+    if not token:
+        return None, None
+    p = sess.query(Profile).filter_by(client_token=token, is_rental=True).first()
+    if not p or not hmac.compare_digest((p.client_token or ""), token):
+        return None, (jsonify({"ok": False, "error": "enlace_invalido", "message": "Enlace no válido. Pide uno nuevo a soporte."}), 401)
+    return p, None
+
+def rental_auth(sess, allow_query=False):
+    """Dos caminos de autenticación para /renta/api/*: el enlace secreto (token)
+    o el initData de Telegram. En ambos casos el perfil sale SOLO de la
+    autenticación; nunca se acepta un profile_id enviado por la cliente."""
+    p, err = rental_from_token(sess, allow_query=allow_query)
+    if p or err: return p, err
+    return rental_from_init_data(sess, allow_query=allow_query)
 
 def fmt_price(v):
     try: v = float(v or 0)
@@ -1030,14 +1116,17 @@ def rental_status_payload(p, sess=None):
         if not dt: return None
         if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
+    _lp = (getattr(p, "last_photo_path", "") or "").strip()
+    _has_photo = bool(_lp) and os.path.exists(_lp) and os.path.getsize(_lp) > 0
+    _photo_ts = int(os.path.getmtime(_lp)) if _has_photo else 0
     return {"ok": True, "codigo": p.codigo,
             "estado": "VENCIDO" if p.rental_expired else ("PAUSADO" if p.paused else "ACTIVO"),
             "paused": bool(p.paused), "rental_expired": bool(p.rental_expired),
             "ubicacion": p.ubicacion or "", "texto": p.texto or "",
             "vence": vence, "vence_corto": vence_corto, "faltan": faltan,
             "proximo_bump": prox, "bumps_hoy": p.bumps_today or 0,
-            "next_bump_at_ms": _ms(p.next_bump_at_utc), "vence_at_ms": _ms(exp),
-            "foto_url": p.foto_url or "",
+            "next_bump_at_ms": _ms(p.next_bump_at_utc), "vence_at_ms": _ms(exp), "last_bump_at_ms": _ms(p.last_bump_at_utc),
+            "foto_url": p.foto_url or "", "has_photo": _has_photo, "photo_ts": _photo_ts,
             "edit_texto_disponible": lt <= 0, "edit_texto_faltan_h": round(lt / 3600, 1) if lt > 0 else 0,
             "offers": offers_payload(sess)}
 
@@ -1105,6 +1194,7 @@ RENTA_APP_HTML = """<!doctype html>
     <div class="foto" id="fotoBox"><span id="fotoTxt">Foto de tu anuncio</span><img id="fotoImg" style="display:none" alt=""></div>
     <div class="estado" id="estadoTxt"></div>
     <div class="estado" id="venceTxt"></div>
+    <div class="estado" id="ultimoBump"></div>
     <div class="bumpbox"><div class="b1">PRÓXIMO BUMP</div><div class="b2" id="proxBump">—</div><div class="b3" id="bumpsHoy"></div></div>
     <div class="grid">
       <button class="btn red" id="btnEdit">EDIT POST</button>
@@ -1141,7 +1231,7 @@ RENTA_APP_HTML = """<!doctype html>
     </div>
     <div id="payPanel" class="panel" style="display:none">
       <h3>RENOVAR / PAGAR</h3>
-      <div style="font-size:13px;color:#831843">Elige una opción y te contactamos en este chat para el pago.</div>
+      <div id="payHint" style="font-size:13px;color:#831843">Elige una opción y te contactamos en este chat para el pago.</div>
       <div id="offersList"></div>
       <button class="btn sup" id="btnPaySupport">💬 Hablar con soporte</button>
     </div>
@@ -1151,15 +1241,16 @@ RENTA_APP_HTML = """<!doctype html>
 <script>
 var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
 var initData = tg ? (tg.initData || "") : "";
+var clientToken = __CLIENT_TOKEN_JSON__;  // modo web: llave del enlace directo (sin Telegram)
 if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 function $(id) { return document.getElementById(id); }
 function showMsg(t, ok) { var m = $("msg"); m.style.display = "block"; m.textContent = t; m.className = "msg " + (ok ? "ok" : "err"); try { m.scrollIntoView({behavior: "smooth", block: "center"}); } catch (e) {} }
 function api(path, body) {
-  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Telegram-Init-Data": initData}, body: JSON.stringify(body || {})})
+  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Telegram-Init-Data": initData, "X-Client-Token": clientToken}, body: JSON.stringify(body || {})})
     .then(function (r) { return r.json().then(function (j) { return {status: r.status, j: j}; }); });
 }
 var ST = null;
-var bumpTarget = 0, venceTarget = 0, lastZeroRefresh = 0;
+var bumpTarget = 0, venceTarget = 0, lastBumpTarget = 0, lastZeroRefresh = 0;
 function fmtCuenta(ms) {
   var s = Math.max(0, Math.floor(ms / 1000));
   var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
@@ -1186,18 +1277,42 @@ function tickClocks() {
       $("venceTxt").textContent = "⏳ Tu renta vence en: " + Math.floor(s / 86400) + "d " + Math.floor(s % 86400 / 3600) + "h " + Math.floor(s % 3600 / 60) + "m " + (s % 60) + "s";
     }
   } else { $("venceTxt").textContent = ""; }
+  if (lastBumpTarget) {
+    var seg = Math.max(0, Math.floor((now - lastBumpTarget) / 1000));
+    if (seg < 60) $("ultimoBump").textContent = "✅ Último bump: hace menos de 1 min";
+    else if (seg < 3600) $("ultimoBump").textContent = "✅ Último bump: hace " + Math.floor(seg / 60) + " min";
+    else if (seg < 86400) $("ultimoBump").textContent = "✅ Último bump: hace " + Math.floor(seg / 3600) + " h " + Math.floor(seg % 3600 / 60) + " min";
+    else $("ultimoBump").textContent = "✅ Último bump: hace " + Math.floor(seg / 86400) + " d";
+  } else { $("ultimoBump").textContent = ""; }
 }
 setInterval(tickClocks, 1000);
 setInterval(function () { loadStatus(true); }, 30000);
 document.addEventListener("visibilitychange", function () { if (!document.hidden) loadStatus(true); });
+function setFoto(st) {
+  // Tarjeta CURRENT POST: primero la copia local que sirve este servidor
+  // (/renta/api/photo, con cache-buster para refrescar tras cada bump);
+  // respaldo: la URL externa guardada; si no hay ninguna, el recuadro.
+  var im = $("fotoImg"), src = "";
+  if (st.has_photo) src = "/renta/api/photo?" + (clientToken ? "client_token=" + encodeURIComponent(clientToken) : "init_data=" + encodeURIComponent(initData)) + "&v=" + (st.photo_ts || "");
+  else if (st.foto_url) src = st.foto_url;
+  if (src) {
+    if (im.getAttribute("data-src") !== src) { im.setAttribute("data-src", src); im.src = src; }
+    im.style.display = "block"; $("fotoTxt").style.display = "none";
+  } else { im.style.display = "none"; $("fotoTxt").style.display = "block"; }
+}
+$("fotoImg").onerror = function () {
+  // Si la copia local falla, intenta la URL externa; si también falla, el recuadro.
+  if (ST && ST.foto_url && this.getAttribute("data-src") !== ST.foto_url) { this.setAttribute("data-src", ST.foto_url); this.src = ST.foto_url; }
+  else { this.style.display = "none"; $("fotoTxt").style.display = "block"; }
+};
 function render(st) {
   ST = st;
   $("venceBadge").textContent = st.vence_corto ? ("VENCE: " + st.vence_corto) : "VENCE";
-  if (st.foto_url) { var im = $("fotoImg"); im.src = st.foto_url; im.style.display = "block"; $("fotoTxt").style.display = "none"; }
+  setFoto(st);
   var estado = st.estado === "ACTIVO" ? "🟢 ACTIVO" : (st.estado === "PAUSADO" ? "🔴 PAUSADO" : "🔒 VENCIDO");
   $("estadoTxt").textContent = estado + " · " + (st.ubicacion || "Sin ubicación") + " · Vence: " + st.vence;
-  bumpTarget = st.next_bump_at_ms || 0; venceTarget = st.vence_at_ms || 0; tickClocks();
-  $("bumpsHoy").textContent = "Bumps hoy: " + st.bumps_hoy + (st.proximo_bump && st.proximo_bump !== "—" ? " · Próximo: " + st.proximo_bump + " (RD)" : "") + " · Te avisamos en el chat cuando suba";
+  bumpTarget = st.next_bump_at_ms || 0; venceTarget = st.vence_at_ms || 0; lastBumpTarget = st.last_bump_at_ms || 0; tickClocks();
+  $("bumpsHoy").textContent = "Bumps hoy: " + st.bumps_hoy + (st.proximo_bump && st.proximo_bump !== "—" ? " · Próximo: " + st.proximo_bump + " (RD)" : "") + (clientToken ? "" : " · Te avisamos en el chat cuando suba");
   var tb = $("btnToggle");
   if (st.paused) { tb.textContent = "ENCENDER ANUNCIO"; tb.className = "btn green wide"; }
   else { tb.textContent = "PAUSAR ANUNCIO"; tb.className = "btn pink wide"; }
@@ -1249,7 +1364,8 @@ $("btnPedirDir").onclick = function () { act("/renta/api/support", {motivo: "dir
 Array.prototype.forEach.call(document.querySelectorAll(".sup"), function (b) {
   b.onclick = function () { act("/renta/api/support", {motivo: b.getAttribute("data-motivo")}); };
 });
-if (!initData) { $("sinbot").style.display = "block"; }
+if (clientToken) $("payHint").textContent = "Elige una opción y te contactamos para el pago.";
+if (!initData && !clientToken) { $("sinbot").style.display = "block"; }
 else { $("app").style.display = "block"; loadStatus(); }
 </script>
 </body></html>
@@ -1257,17 +1373,55 @@ else { $("app").style.display = "block"; loadStatus(); }
 
 @app.route("/renta/app")
 def renta_app():
-    return RENTA_APP_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+    return RENTA_APP_HTML.replace("__CLIENT_TOKEN_JSON__", json.dumps("")), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+ENLACE_INVALIDO_HTML = ("<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Enlace no válido</title>"
+    "<style>body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#fdf2f8}"
+    ".sinbot{max-width:420px;margin:40px auto;background:#fff;border:2px solid #ec4899;border-radius:16px;padding:24px;text-align:center;color:#9d174d;font-size:18px;font-weight:700}"
+    ".sinbot small{display:block;margin-top:8px;font-size:14px;font-weight:400}</style></head>"
+    "<body><div class=\"sinbot\">🔗 Enlace no válido<small>Este enlace ya no sirve. Pide uno nuevo a soporte.</small></div></body></html>")
+
+@app.route("/cliente/<token>")
+def cliente_page(token):
+    """Tarjeta de la cliente como página web normal (sin Telegram): la misma
+    pantalla de /renta/app, pero autenticada con la llave secreta del enlace."""
+    sess = db()
+    p = sess.query(Profile).filter_by(client_token=token, is_rental=True).first() if token else None
+    ok = bool(p) and hmac.compare_digest((p.client_token or ""), token)
+    sess.close()
+    if not ok:
+        return ENLACE_INVALIDO_HTML, 404, {"Content-Type": "text/html; charset=utf-8"}
+    return RENTA_APP_HTML.replace("__CLIENT_TOKEN_JSON__", json.dumps(token)), 200, {"Content-Type": "text/html; charset=utf-8"}
 
 @app.route("/renta/api/status", methods=["POST"])
 def renta_api_status():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     out = rental_status_payload(p, sess); sess.close(); return jsonify(out)
 
+@app.route("/renta/api/photo", methods=["GET"])
+def renta_api_photo():
+    """Sirve la copia local de la última foto del anuncio (tarjeta CURRENT POST).
+    Misma autenticación que el resto de /renta/api/* (initData de Telegram o la
+    llave del enlace directo); acepta la credencial por query porque la etiqueta
+    <img> no puede mandar headers. Cada cliente solo puede ver la foto de SU
+    perfil (el perfil sale de la autenticación, nunca de un id enviado por ella)."""
+    sess = db(); p, err = rental_auth(sess, allow_query=True)
+    if err: sess.close(); return err
+    path = (getattr(p, "last_photo_path", "") or "").strip()
+    sess.close()
+    if not path or not os.path.exists(path) or os.path.getsize(path) <= 0:
+        return jsonify({"ok": False, "error": "sin_foto", "message": "Todavía no hay foto guardada de tu anuncio."}), 404
+    ext = os.path.splitext(path)[1].lower()
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(ext, "image/jpeg")
+    resp = send_file(path, mimetype=mime)
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    return resp
+
 @app.route("/renta/api/pause", methods=["POST"])
 def renta_api_pause():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     b = _renta_expired_block(p)
     if b: sess.close(); return b
@@ -1277,7 +1431,7 @@ def renta_api_pause():
 
 @app.route("/renta/api/resume", methods=["POST"])
 def renta_api_resume():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     b = _renta_expired_block(p)
     if b: sess.close(); return b
@@ -1287,7 +1441,7 @@ def renta_api_resume():
 
 @app.route("/renta/api/bump", methods=["POST"])
 def renta_api_bump():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     b = _renta_expired_block(p)
     if b: sess.close(); return b
@@ -1298,7 +1452,7 @@ def renta_api_bump():
 
 @app.route("/renta/api/foto", methods=["POST"])
 def renta_api_foto():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     b = _renta_expired_block(p)
     if b: sess.close(); return b
@@ -1307,7 +1461,7 @@ def renta_api_foto():
 
 @app.route("/renta/api/edit_text", methods=["POST"])
 def renta_api_edit_text():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     b = _renta_expired_block(p)
     if b: sess.close(); return b
@@ -1327,7 +1481,7 @@ def renta_api_change_city():
 
 @app.route("/renta/api/pay", methods=["POST"])
 def renta_api_pay():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     body = request.get_json(silent=True) or {}
     offer_id = body.get("offer_id")
@@ -1355,7 +1509,7 @@ ESTAFA_TXT_APP = "🚨 Cuidado con mensajes falsos\nSi te mandan un enlace raro 
 
 @app.route("/renta/api/support", methods=["POST"])
 def renta_api_support():
-    sess = db(); p, err = rental_from_init_data(sess)
+    sess = db(); p, err = rental_auth(sess)
     if err: sess.close(); return err
     motivo = str((request.get_json(silent=True) or {}).get("motivo", "")).strip()
     if motivo == "estafa":
